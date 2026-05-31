@@ -1,0 +1,14 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+
+# IDE
+.idea/
+
+# Claude Code
+.claude/settings.local.json

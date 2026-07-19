@@ -1,5 +1,8 @@
+import os
+
 from pypdf import PdfReader
 
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def get_system_prompt_for_profile():
     name = "Sourav Ghosh"
@@ -18,7 +21,8 @@ def get_system_prompt_for_profile():
 
 
 def get_linkedin_details():
-    reader = PdfReader("./resources/SOURAV_GHOSH_LINKEDIN.pdf")
+    linkedin_resume_path = os.path.join(base_dir, "resources", "SOURAV_GHOSH_LINKEDIN.pdf")
+    reader = PdfReader(linkedin_resume_path)
     linkedin = ""
     for page in reader.pages:
         text = page.extract_text()
@@ -28,6 +32,7 @@ def get_linkedin_details():
 
 
 def get_summary():
-    with open("./resources/summary.txt", "r", encoding="utf-8") as f:
+    summary_path = os.path.join(base_dir, "resources", "summary.txt")
+    with open(summary_path, "r", encoding="utf-8") as f:
         summary = f.read()
     return summary

@@ -1,10 +1,10 @@
-from langfuse import Langfuse
 from anthropic.types import TextBlockParam
 from dotenv import load_dotenv
 import anthropic
 import json
 
 import gradio as gr
+from langfuse import get_client, observe
 from openinference.instrumentation.anthropic import AnthropicInstrumentor
 
 from services.profile import get_system_prompt_for_profile
@@ -13,7 +13,13 @@ from services.digest import start_scheduler
 
 load_dotenv(override=True)
 
-# 1. Activate automatic tracing
+# 1. Initialize the Langfuse client — this registers Langfuse as the global
+# OTEL TracerProvider/exporter. Must happen before instrument() emits spans,
+# otherwise they're created against a no-op provider and never get sent.
+langfuse = get_client()
+
+# 2. Activate automatic tracing — patches the Anthropic client so every
+# messages.create() call emits an OTEL span that Langfuse picks up.
 AnthropicInstrumentor().instrument()
 
 # Native Anthropic client — resolves ANTHROPIC_API_KEY from the environment.
@@ -45,6 +51,7 @@ def handle_tool_calls(tool_use_blocks):
     return results
 
 
+@observe(name="chat_turn")
 def chat(message, history):
     # System prompt is a top-level parameter, not a message. History and the new
     # user turn are the only entries in the messages array.
@@ -95,5 +102,5 @@ def chat(message, history):
 
 
 if __name__ == "__main__":
-    start_scheduler()
+    # start_scheduler()
     gr.ChatInterface(fn=chat).launch()

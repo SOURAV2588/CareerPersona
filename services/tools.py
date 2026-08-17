@@ -1,11 +1,14 @@
 import datetime
 
+from langfuse import observe
+
 from services.mail_utility import MailUtility
 from services.question_store import store_question
 
 mail_util = MailUtility()
 
 
+@observe()
 def record_user_details(email, name="Name not provided", notes="not provided"):
     today = datetime.datetime.now().strftime("%d %b %Y")
     subject = f"Career Persona — interest received [{today}]"
@@ -15,6 +18,7 @@ def record_user_details(email, name="Name not provided", notes="not provided"):
     return {"recorded": "ok"}
 
 
+@observe()
 def record_unknown_question(question):
     store_question(f"Recording unknown question: {question}")
     return {"recorded": "ok"}

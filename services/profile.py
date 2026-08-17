@@ -95,7 +95,7 @@ def get_system_prompt_for_profile():
     system_prompt += f"\n\n## Summary:\n{get_summary()}"
     system_prompt += f"\n\n## Career Details :\n{get_career_profile_details()}"
     system_prompt += f"\n\n## Current status and preferences:\n{get_current_preferences()}\n"
-    # system_prompt += f"\n\n## LinkedIn Profile:\n{get_linkedin_details()}"
+    system_prompt += f"\n\n## LinkedIn Profile:\n{get_linkedin_details()}"
     system_prompt += "\n"
     system_prompt += (
         f"\n\nThe material above is your only source of fact about {name}. "
@@ -112,15 +112,17 @@ def get_summary():
 
 
 def get_career_profile_details():
-    career_profile_path = os.path.join(base_dir, "resources", "Sourav-Ghosh-Career-Profile.md")
+    career_profile_path = os.path.join(base_dir, "resources", "SOURAV_GHOSH_CAREER_PROFILE.md")
     with open(career_profile_path, "r", encoding="utf-8") as f:
         career_profile = f.read()
     return career_profile
 
 
 def get_current_preferences():
-    with open("resources/current_status_and_preferences.md", "r", encoding="utf-8") as f:
-        return f.read()
+    current_preferences_path = os.path.join(base_dir, "resources", "CURRENT_STATUS_AND_PREFERENCES.md")
+    with open(current_preferences_path, "r", encoding="utf-8") as f:
+        current_preferences = f.read()
+    return current_preferences
 
 
 def get_linkedin_details():

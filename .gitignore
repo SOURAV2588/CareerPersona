@@ -10,5 +10,8 @@ venv/
 # IDE
 .idea/
 
+# Local runtime data (stored unanswered questions)
+data/
+
 # Claude Code
 .claude/settings.local.json

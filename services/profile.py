@@ -4,6 +4,17 @@ from pypdf import PdfReader
 
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+FALLBACK_BUSY = (
+    "Sorry — I'm getting a lot of traffic at the moment and couldn't put a "
+    "reply together. Give it a few seconds and ask me again?"
+)
+
+FALLBACK_GENERIC = (
+    "Sorry — something went wrong on my end just then, so I couldn't answer "
+    "properly. Try rephrasing, or reach me directly at "
+    "souravghosh358@gmail.com and I'll reply myself."
+)
+
 def get_system_prompt_for_profile():
     name = "Sourav Ghosh"
 

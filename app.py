@@ -1,15 +1,16 @@
+import json
+import logging
+
+import anthropic
+import gradio as gr
 from anthropic.types import TextBlockParam
 from dotenv import load_dotenv
-import anthropic
-import json
-
-import gradio as gr
 from langfuse import get_client, observe
 from openinference.instrumentation.anthropic import AnthropicInstrumentor
 
-from services.profile import get_system_prompt_for_profile
-from services.tools import record_user_details, record_unknown_question, tools
 from services.digest import start_scheduler
+from services.profile import get_system_prompt_for_profile, FALLBACK_BUSY, FALLBACK_GENERIC
+from services.tools import record_user_details, record_unknown_question, tools
 
 load_dotenv(override=True)
 
@@ -23,11 +24,14 @@ langfuse = get_client()
 AnthropicInstrumentor().instrument()
 
 # Native Anthropic client — resolves ANTHROPIC_API_KEY from the environment.
-client = anthropic.Anthropic()
+client = anthropic.Anthropic(max_retries=4, timeout=30.0)
 
 # Upper bound on tool-use round-trips within a single chat turn, in case the
 # model keeps emitting tool calls instead of a final answer.
 MAX_TOOL_ITERATIONS = 5
+
+logger = logging.getLogger(__name__)
+
 
 def handle_tool_calls(tool_use_blocks):
     results = []
@@ -36,12 +40,15 @@ def handle_tool_calls(tool_use_blocks):
         arguments = tool_use.input
         print(f"Tool called: {tool_name}", flush=True)
 
-        if tool_name == "record_user_details":
-            result = record_user_details(**arguments)
-        elif tool_name == "record_unknown_question":
-            result = record_unknown_question(**arguments)
-        else:
-            result = {"error": f"Tool not found: {tool_name}"}
+        try:
+            if tool_name == "record_user_details":
+                result = record_user_details(**arguments)
+            elif tool_name == "record_unknown_question":
+                result = record_unknown_question(**arguments)
+            else:
+                result = {"error": f"Tool not found: {tool_name}"}
+        except Exception as e:
+            result = {"error": str(e)}
 
         results.append({
             "type": "tool_result",
@@ -53,6 +60,25 @@ def handle_tool_calls(tool_use_blocks):
 
 @observe(name="chat_turn")
 def chat(message, history):
+    try:
+        return _chat(message, history)
+    except (anthropic.RateLimitError,
+            anthropic.InternalServerError,
+            anthropic.APIConnectionError) as exc:
+        logger.warning("Transient Anthropic error", exc_info=exc)
+        return FALLBACK_BUSY
+    except anthropic.APIError as exc:
+        # 400/401/403 — misconfiguration, not the visitor's problem
+        logger.error("Anthropic API error", exc_info=exc)
+        return FALLBACK_GENERIC
+    except Exception as exc:
+        # Tool failures, PDF read failures, anything else (§11 item 5)
+        logger.exception("Unhandled error in chat turn")
+        return FALLBACK_GENERIC
+
+
+@observe(name="chat_turn")
+def _chat(message, history):
     # System prompt is a top-level parameter, not a message. History and the new
     # user turn are the only entries in the messages array.
     # Gradio's ChatInterface passes history dicts with extra keys (e.g. "metadata",
@@ -69,6 +95,7 @@ def chat(message, history):
                 "cache_control": {"type": "ephemeral"},
             }
         ]
+
         response = client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=1024,
@@ -76,7 +103,6 @@ def chat(message, history):
             messages=messages,
             tools=tools,
         )
-        print(response.usage)
 
         # If the LLM wants to call a tool, we do that and loop again!
         if response.stop_reason == "tool_use":
@@ -102,5 +128,5 @@ def chat(message, history):
 
 
 if __name__ == "__main__":
-    # start_scheduler()
-    gr.ChatInterface(fn=chat).launch()
+    start_scheduler()
+    gr.ChatInterface(fn=chat).launch(show_error=False)

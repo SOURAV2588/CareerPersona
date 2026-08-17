@@ -1,25 +1,22 @@
+import datetime
+
 from services.mail_utility import MailUtility
+from services.question_store import store_question
 
 mail_util = MailUtility()
 
-def record_user_details(email, name="Name not provided", notes="not provided"):
-    # Not using Pushover as this is a paid service
-    # push(f"Recording interest from {name} with email {email} and notes {notes}")
 
-    # Using GMAIL APIs
-    mail_util.send_email(f"Recording interest from {name} with email {email} and notes {notes}")
+def record_user_details(email, name="Name not provided", notes="not provided"):
+    today = datetime.datetime.now().strftime("%d %b %Y")
+    subject = f"Career Persona — interest received [{today}]"
+
+    mail_util.send_email(subject,
+                         f"Recording interest from {name} with email {email} and notes {notes}")
     return {"recorded": "ok"}
 
 
 def record_unknown_question(question):
-    # TODO - Pushover notification replaced by a daily email digest (see services/digest.py).
-    # store_question(question)
-
-    # Not using Pushover as this is a paid service
-    # push(f"Recording {question} asked that I couldn't answer")
-
-    # Using GMAIL APIs
-    mail_util.send_email(f"Recording unknown question: {question}")
+    store_question(f"Recording unknown question: {question}")
     return {"recorded": "ok"}
 
 

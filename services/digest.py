@@ -1,0 +1,80 @@
+# Daily email digest of unanswered questions.
+#
+# A background scheduler fires send_daily_digest() at 9:30 PM IST. If any
+# questions were recorded since the last successful send, they are emailed via
+# Gmail SMTP and then archived; if there are none, no email is sent.
+
+from datetime import datetime
+
+from dotenv import load_dotenv
+
+from services.mail_utility import MailUtility
+from services.question_store import read_pending, clear_pending
+
+load_dotenv(override=True)
+_scheduler = None
+
+
+def _build_message_subject_and_body(entries):
+    lines = ["Unanswered questions from your Career Persona:\n"]
+    for i, entry in enumerate(entries, 1):
+        lines.append(f"{i}. {entry['question']}  ({entry.get('timestamp', 'unknown time')})")
+    body = "\n".join(lines)
+
+    today = datetime.now().strftime("%d %b %Y")
+    subject = f"Career Persona — {len(entries)} unanswered question(s) [{today}]"
+    return subject, body
+
+
+def send_daily_digest():
+    """Send the pending unanswered questions as one email, then archive them.
+
+    No-op (no email) when there are no pending questions.
+    """
+    entries = read_pending()
+    if not entries:
+        print("No unanswered questions to send; skipping digest email.", flush=True)
+        return
+
+    mail_subject, mail_body = _build_message_subject_and_body(entries)
+    try:
+        mail_service = MailUtility()
+        mail_service.send_email(subject=mail_subject, body=mail_body)
+    except Exception as e:
+        # Leave the questions in the pending store so they roll over to the next run.
+        print(f"Failed to send digest email: {e}", flush=True)
+        return
+
+    clear_pending(entries)
+    print(f"Digest email sent with {len(entries)} question(s).", flush=True)
+
+
+def start_scheduler():
+    """Start the background scheduler that emails the digest at 9:30 PM IST.
+
+    Safe to call more than once; the job is created only on the first call.
+    """
+    global _scheduler
+    if _scheduler is not None:
+        return
+
+    from apscheduler.schedulers.background import BackgroundScheduler
+    import pytz
+
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(
+        send_daily_digest,
+        trigger="cron",
+        hour=21,
+        minute=30,
+        timezone=pytz.timezone("Asia/Kolkata"),
+        id="daily_digest",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    print("Daily digest scheduler started (9:30 PM IST).", flush=True)
+
+
+if __name__ == "__main__":
+    # Manual test: send (or skip) the digest immediately.
+    send_daily_digest()

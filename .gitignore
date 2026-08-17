@@ -7,6 +7,10 @@ __pycache__/
 *.pyo
 venv/
 
+# Test artifacts
+.pytest_cache/
+.coverage
+
 # IDE
 .idea/
 

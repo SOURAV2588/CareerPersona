@@ -2,7 +2,11 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from services import langfuse_test
+
+pytestmark = pytest.mark.unit
 
 
 def test_test_generation_returns_expected_greeting():

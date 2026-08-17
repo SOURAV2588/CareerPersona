@@ -6,6 +6,8 @@ import pytest
 
 from services import tools
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def fresh_mail_util(monkeypatch):

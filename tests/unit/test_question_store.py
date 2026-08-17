@@ -6,6 +6,8 @@ import pytest
 
 from services import question_store
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def isolated_store(tmp_path, monkeypatch):

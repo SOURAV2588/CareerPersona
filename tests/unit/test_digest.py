@@ -7,6 +7,8 @@ import pytest
 
 from services import digest
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def reset_scheduler_singleton(monkeypatch):

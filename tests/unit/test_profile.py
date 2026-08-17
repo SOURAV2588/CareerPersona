@@ -6,6 +6,8 @@ import pytest
 
 from services import profile
 
+pytestmark = pytest.mark.unit
+
 
 def test_get_summary_reads_resources_summary_txt():
     content = profile.get_summary()

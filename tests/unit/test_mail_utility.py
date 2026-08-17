@@ -13,6 +13,8 @@ import pytest
 
 from services.mail_utility import MailUtility
 
+pytestmark = pytest.mark.unit
+
 
 def test_get_credentials_reads_from_environment(monkeypatch):
     monkeypatch.setenv("GMAIL_CLIENT_ID", "cid-123")

@@ -15,10 +15,10 @@ class MailUtility:
         creds = self.get_credentials()
         self.service = build("gmail", "v1", credentials=creds)
 
-    def send_email(self, body):
+    def send_email(self, subject, body):
         message = EmailMessage()
-        message["To"] = "souravghosh358@gmail.com"
-        message["Subject"] = "Question from CareerPersona"
+        message["To"] = os.getenv("GMAIL_RECIPIENT")
+        message["Subject"] = subject
         message.set_content(body)
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()

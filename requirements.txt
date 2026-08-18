@@ -8,5 +8,7 @@ google-auth-oauthlib
 google-api-python-client
 apscheduler==3.11.0
 pytz==2025.2
+psycopg[binary]==3.2.10
+psycopg-pool==3.2.6
 langfuse
 openinference-instrumentation-anthropic

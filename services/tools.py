@@ -88,7 +88,7 @@ def record_unknown_question(question):
     :return: ``{"recorded": "ok"}``.
     :rtype: dict
     """
-    store_question(f"Recording unknown question: {question}")
+    store_question(question)
     return {"recorded": "ok"}
 
 

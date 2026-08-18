@@ -69,7 +69,7 @@ class TestRecordUnknownQuestion:
         result = tools.record_unknown_question("What is the meaning of life?")
 
         fresh_store_question.assert_called_once_with(
-            "Recording unknown question: What is the meaning of life?"
+            "What is the meaning of life?"
         )
         assert result == {"recorded": "ok"}
 

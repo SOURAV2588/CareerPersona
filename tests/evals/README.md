@@ -9,7 +9,7 @@ directory is evals only.
 | Layer | File | Network | When |
 |---|---|---|---|
 | Deterministic evals | `test_deterministic_cases.py` + `deterministic_eval_cases.yaml` (`deterministic:`) | real API | on demand |
-| Judged evals | `test_judged_by_llm_cases.py` + `judged_eval_cases.yaml` (`judged:`) | real API + judge model | on demand |
+| Judged evals | `test_judged_by_llm_cases.py` + `judged_eval_cases.yaml` (`judged:`), grading logic in `llm_judge.py` | real API + judge model | on demand |
 
 ## Run
 
@@ -29,7 +29,8 @@ pytest tests/evals -m live          # just this directory, both layers
 
 Judged evals make two kinds of real API calls: one to the app's own model via
 `app.chat()`, and one per case to a separate judge model. Configure the
-judge with environment variables (see `test_judged_by_llm_cases.py`'s module docstring):
+judge with environment variables (read in `llm_judge.py`, documented in
+`test_judged_by_llm_cases.py`'s module docstring):
 
 ```bash
 EVAL_JUDGE_MODEL=claude-sonnet-5      # default; a stronger model than the app's

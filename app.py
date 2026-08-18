@@ -13,6 +13,7 @@ import logging
 
 import anthropic
 import gradio as gr
+import psycopg
 from anthropic.types import TextBlockParam
 from dotenv import load_dotenv
 from langfuse import get_client, observe
@@ -212,6 +213,14 @@ def _chat(message, history):
 
 
 if __name__ == "__main__":
-    init_db()
+    try:
+        init_db()
+    except (RuntimeError, psycopg.Error):
+        # Postgres unreachable/misconfigured at startup. Degrade instead of
+        # crashing: chat still works; record_unknown_question and the daily
+        # digest will error out individually until the DB comes back.
+        logger.exception("Database initialization failed; unanswered-question "
+                          "storage and the daily digest will be unavailable "
+                          "until DATABASE_URL is reachable.")
     start_scheduler()
     gr.ChatInterface(fn=chat).launch(show_error=False)

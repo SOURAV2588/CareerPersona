@@ -1,8 +1,10 @@
 """Tests for services.mail_utility.MailUtility.
 
-googleapiclient.discovery.build is stubbed session-wide in tests/conftest.py so
-constructing a MailUtility never touches the network; individual tests below
-attach their own fresh mock where they need to assert on call details.
+The Gmail service is built lazily, on first use of `.service` (or the first
+`send_email()` call), not at construction. googleapiclient.discovery.build is
+also stubbed session-wide in tests/conftest.py so nothing here ever touches
+the network; individual tests below attach their own fresh mock where they
+need to assert on call details.
 """
 
 import base64
@@ -31,16 +33,33 @@ def test_get_credentials_reads_from_environment(monkeypatch):
     assert creds.token is None
 
 
-def test_init_builds_gmail_v1_service(monkeypatch):
+def test_init_does_not_build_service_eagerly(monkeypatch):
     fake_build = MagicMock(return_value=MagicMock())
     monkeypatch.setattr("services.mail_utility.build", fake_build)
 
     MailUtility()
 
+    fake_build.assert_not_called()
+
+
+def test_service_is_built_lazily_on_first_use_and_then_cached(monkeypatch):
+    fake_build = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr("services.mail_utility.build", fake_build)
+
+    mail_util = MailUtility()
+    fake_build.assert_not_called()
+
+    first = mail_util.service
+
     assert fake_build.call_count == 1
     args, kwargs = fake_build.call_args
     assert args[:2] == ("gmail", "v1")
     assert "credentials" in kwargs
+
+    second = mail_util.service
+
+    assert second is first
+    assert fake_build.call_count == 1  # not rebuilt on repeat access
 
 
 def test_send_email_sends_base64_encoded_message_to_configured_recipient(monkeypatch):

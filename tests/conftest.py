@@ -1,11 +1,13 @@
 """Shared pytest setup.
 
-Several modules under test read credentials from the environment at *import
-time* (``services.mail_utility`` calls ``load_dotenv(override=True)``, and
-``services.tools`` builds a module-level ``MailUtility()`` singleton as soon
-as it is imported). To keep the suite hermetic — importable with no ``.env``
-file present, and incapable of making a real network call even if a real
-``.env`` happens to be sitting in the working directory — this module:
+``services.mail_utility`` reads credentials from the environment at *import
+time* via ``load_dotenv(override=True)``, and builds a module-level
+``mail_util = MailUtility()`` singleton (shared by ``services.tools`` and
+``services.digest``) as soon as it is imported — though that singleton only
+builds its actual Gmail service lazily, on first use. To keep the suite
+hermetic — importable with no ``.env`` file present, and incapable of making
+a real network call even if a real ``.env`` happens to be sitting in the
+working directory — this module:
 
 1. Seeds dummy credential env vars before anything else is imported.
 2. Patches ``googleapiclient.discovery.build`` for the whole session so no

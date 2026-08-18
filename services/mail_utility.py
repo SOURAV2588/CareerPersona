@@ -12,8 +12,17 @@ load_dotenv(override=True)
 class MailUtility:
 
     def __init__(self):
-        creds = self.get_credentials()
-        self.service = build("gmail", "v1", credentials=creds)
+        self._service = None
+
+    @property
+    def service(self):
+        # Built on first use, not at construction, so importing/instantiating
+        # this class never requires valid Gmail credentials or performs a
+        # client build for a process that never ends up sending an email.
+        if self._service is None:
+            creds = self.get_credentials()
+            self._service = build("gmail", "v1", credentials=creds)
+        return self._service
 
     def send_email(self, subject, body):
         recipient = os.getenv("GMAIL_RECIPIENT")
@@ -39,3 +48,9 @@ class MailUtility:
             token_uri="https://oauth2.googleapis.com/token",
             scopes=["https://www.googleapis.com/auth/gmail.send"],
         )
+
+
+# Single shared instance: both services.tools (immediate notifications) and
+# services.digest (the daily digest) send through this one lazily-built
+# client instead of each constructing and authenticating their own.
+mail_util = MailUtility()

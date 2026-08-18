@@ -8,7 +8,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from services.mail_utility import MailUtility
+from services.mail_utility import mail_util
 from services.question_store import read_pending, clear_pending
 
 load_dotenv(override=True)
@@ -38,8 +38,7 @@ def send_daily_digest():
 
     mail_subject, mail_body = _build_message_subject_and_body(entries)
     try:
-        mail_service = MailUtility()
-        mail_service.send_email(subject=mail_subject, body=mail_body)
+        mail_util.send_email(subject=mail_subject, body=mail_body)
     except Exception as e:
         # Leave the questions in the pending store so they roll over to the next run.
         print(f"Failed to send digest email: {e}", flush=True)

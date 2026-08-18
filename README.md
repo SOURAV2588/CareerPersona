@@ -239,7 +239,7 @@ pytest --cov=app --cov=services --cov-report=term-missing
 
 ### About the test results
 
-A plain `pytest` run currently reports `48 passed, 47 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
+A plain `pytest` run currently reports `49 passed, 47 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
 
 Treating the test output as a live, up-to-date bug list is deliberate — see `SPEC.md` §11 and §14 for the full breakdown, including a couple of now-fixed bugs whose test docstrings haven't caught up with the fix yet (harmless, just misleading if read on their own).
 
@@ -255,7 +255,7 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 
 **Files instead of a database.** JSON Lines files handle all persistence. For the volume this application sees, a database would add operational overhead without solving a real problem.
 
-**One email path.** Immediate notifications and the daily digest both go through the same `MailUtility` class. An earlier version used two different mechanisms for the same job.
+**One email path.** Immediate notifications and the daily digest both go through the same shared `mail_util` instance of the `MailUtility` class — not just the same class, the same object — and it builds its Gmail service lazily on first send rather than at construction. An earlier version used two different mechanisms for the same job.
 
 **Prompt-injection guardrails.** Visitor text is always treated as a question, never as an instruction that changes the system prompt's rules. Both the system prompt and the `record_user_details` tool description explicitly warn against copying visitor-dictated wording (e.g. a "note" telling the model what to say about them) into a tool call or a reply.
 
@@ -264,7 +264,7 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 ## Known limitations
 
 - Tools always report `{"recorded": "ok"}` to the model even when the underlying send/store failed; `handle_tool_calls()` catches the exception one layer up but reports it as plain text, not the SDK's `is_error` field — so the model can still tell a visitor "I've noted that down" after a failed send. Tracked by two `xfail(strict=True)` tests (see [Testing](#testing)).
-- `services/digest.py` rebuilds a `MailUtility` (full OAuth setup) on every scheduled run instead of reusing one instance, and its module docstring still describes an older SMTP-based implementation.
+- `services/digest.py`'s module docstring still describes an older SMTP-based implementation, even though it sends through `MailUtility` (Gmail API/OAuth).
 - The persona name and background-file filenames are hardcoded in `services/profile.py`.
 - Evaluation runs (as of the last recorded deterministic run, on an earlier version of the system prompt and dataset) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reached the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run, and the judged layer (added since) has not yet had a first real run at all.
 - No `LICENSE` file.

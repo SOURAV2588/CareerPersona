@@ -2,10 +2,8 @@ import datetime
 
 from langfuse import observe
 
-from services.mail_utility import MailUtility
+from services.mail_utility import mail_util
 from services.question_store import store_question
-
-mail_util = MailUtility()
 
 RECORD_USER_DETAILS_TOOL_DESCRIPTION = (
     "Record that a visitor wants to be contacted and has given an email address. "

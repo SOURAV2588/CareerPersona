@@ -60,14 +60,14 @@ class TestBuildMessageSubjectAndBody:
 class TestSendDailyDigest:
     def test_noop_when_no_pending_questions(self, monkeypatch, capsys):
         monkeypatch.setattr(digest, "read_pending", MagicMock(return_value=[]))
-        mail_util_cls = MagicMock()
-        monkeypatch.setattr(digest, "MailUtility", mail_util_cls)
+        fake_mail_util = MagicMock()
+        monkeypatch.setattr(digest, "mail_util", fake_mail_util)
         clear_pending = MagicMock()
         monkeypatch.setattr(digest, "clear_pending", clear_pending)
 
         digest.send_daily_digest()
 
-        mail_util_cls.assert_not_called()
+        fake_mail_util.send_email.assert_not_called()
         clear_pending.assert_not_called()
         assert "skipping digest" in capsys.readouterr().out
 
@@ -77,14 +77,13 @@ class TestSendDailyDigest:
         clear_pending = MagicMock()
         monkeypatch.setattr(digest, "clear_pending", clear_pending)
 
-        fake_instance = MagicMock()
-        mail_util_cls = MagicMock(return_value=fake_instance)
-        monkeypatch.setattr(digest, "MailUtility", mail_util_cls)
+        fake_mail_util = MagicMock()
+        monkeypatch.setattr(digest, "mail_util", fake_mail_util)
 
         digest.send_daily_digest()
 
-        fake_instance.send_email.assert_called_once()
-        kwargs = fake_instance.send_email.call_args.kwargs
+        fake_mail_util.send_email.assert_called_once()
+        kwargs = fake_mail_util.send_email.call_args.kwargs
         assert "1 unanswered question(s)" in kwargs["subject"]
         assert "Q1" in kwargs["body"]
         clear_pending.assert_called_once_with(entries)
@@ -95,9 +94,9 @@ class TestSendDailyDigest:
         clear_pending = MagicMock()
         monkeypatch.setattr(digest, "clear_pending", clear_pending)
 
-        fake_instance = MagicMock()
-        fake_instance.send_email.side_effect = RuntimeError("SMTP down")
-        monkeypatch.setattr(digest, "MailUtility", MagicMock(return_value=fake_instance))
+        fake_mail_util = MagicMock()
+        fake_mail_util.send_email.side_effect = RuntimeError("SMTP down")
+        monkeypatch.setattr(digest, "mail_util", fake_mail_util)
 
         digest.send_daily_digest()
 

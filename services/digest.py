@@ -2,21 +2,17 @@
 #
 # A background scheduler fires send_daily_digest() at 9:30 PM IST. If any
 # questions were recorded since the last successful send, they are emailed via
-# Gmail SMTP and then archived; if there are none, no email is sent.
+# the Gmail API and marked sent; if there are none, no email is sent.
 
-from datetime import datetime, date
+from datetime import datetime
 
 from dotenv import load_dotenv
 
 from services.mail_utility import mail_util
-from services.question_store import read_pending, clear_pending
 from services.question_store_db import fetch_pending, mark_sent
 
 load_dotenv(override=True)
 _scheduler = None
-
-
-
 
 
 def send_daily_digest() -> None:
@@ -39,28 +35,6 @@ def _build_message_subject_and_body(entries):
     today = datetime.now().strftime("%d %b %Y")
     subject = f"Career Persona — {len(entries)} unanswered question(s) [{today}]"
     return subject, body
-
-
-# def send_daily_digest():
-#     """Send the pending unanswered questions as one email, then archive them.
-#
-#     No-op (no email) when there are no pending questions.
-#     """
-#     entries = read_pending()
-#     if not entries:
-#         print("No unanswered questions to send; skipping digest email.", flush=True)
-#         return
-#
-#     mail_subject, mail_body = _build_message_subject_and_body(entries)
-#     try:
-#         mail_util.send_email(subject=mail_subject, body=mail_body)
-#     except Exception as e:
-#         # Leave the questions in the pending store so they roll over to the next run.
-#         print(f"Failed to send digest email: {e}", flush=True)
-#         return
-#
-#     clear_pending(entries)
-#     print(f"Digest email sent with {len(entries)} question(s).", flush=True)
 
 
 def start_scheduler():

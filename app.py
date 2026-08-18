@@ -9,6 +9,7 @@ from langfuse import get_client, observe
 from openinference.instrumentation.anthropic import AnthropicInstrumentor
 
 from services import rate_limit
+from services.db import init_db
 from services.digest import start_scheduler
 from services.profile import get_system_prompt_for_profile, FALLBACK_BUSY, FALLBACK_GENERIC, FALLBACK_TOO_LONG, \
     FALLBACK_RATE_LIMITED
@@ -144,5 +145,6 @@ def _chat(message, history):
 
 
 if __name__ == "__main__":
+    init_db()
     start_scheduler()
     gr.ChatInterface(fn=chat).launch(show_error=False)

@@ -5,7 +5,7 @@ from langfuse import observe
 
 from services import rate_limit
 from services.mail_utility import mail_util
-from services.question_store import store_question
+from services.question_store_db import store_question
 
 logger = logging.getLogger(__name__)
 

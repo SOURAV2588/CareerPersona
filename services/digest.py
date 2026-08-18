@@ -13,7 +13,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from services.mail_utility import mail_util
-from services.question_store_db import fetch_pending, mark_sent
+from services.question_store import fetch_pending, mark_sent
 
 load_dotenv(override=True)
 _scheduler = None

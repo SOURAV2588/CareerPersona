@@ -1,79 +1,64 @@
-"""File-based storage for unanswered questions.
+"""PostgreSQL-backed storage for unanswered questions.
 
-The chat handler appends questions here as they come in; the daily digest
-job (running on a background scheduler thread) reads and clears them. A
-plain JSONL file is used so questions survive app restarts and need no
-extra dependency.
-
-.. note::
-   This module is superseded by :mod:`services.question_store_db`, which
-   stores questions in PostgreSQL instead. See ``services/digest.py`` for
-   which store is currently wired up.
+The database-backed counterpart to :mod:`services.question_store` (which
+uses a JSONL file). Questions are recorded via :func:`store_question` as
+they come in from the chat handler, and read/cleared by the daily digest
+job via :func:`fetch_pending` and :func:`mark_sent`. All access goes
+through the connection pool from :mod:`services.db`.
 """
 
-import json
-import os
-from datetime import datetime, timezone
+from services.db import get_pool
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-PENDING_FILE = os.path.join(DATA_DIR, "unknown_questions.jsonl")
-ARCHIVE_FILE = os.path.join(DATA_DIR, "sent_questions.jsonl")
 
-def store_question(question):
-    """
-    Append a single unanswered question to the pending store.
-
-    Creates ``DATA_DIR`` if it does not yet exist. Each entry is written as
-    one JSON object per line, with a UTC ISO-8601 timestamp attached.
+def store_question(question: str) -> None:
+    """Insert a new unanswered question into the ``unknown_questions`` table.
 
     :param question: The unanswered question to store.
     :type question: str
     :return: None
     """
-    os.makedirs(DATA_DIR, exist_ok=True)
-    entry = {"question": question, "timestamp": datetime.now(timezone.utc).isoformat()}
-    with open(PENDING_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    with get_pool().connection() as conn:
+        conn.execute(
+            "INSERT INTO unknown_questions (question) VALUES (%s)",
+            (question,),
+        )
 
 
-def read_pending():
-    """
-    Return all pending questions as a list of dicts ([] if none).
+def fetch_pending() -> list[dict]:
+    """Fetch all questions that have not yet been sent in a digest.
 
-    Reads and parses ``PENDING_FILE`` line by line; returns an empty list
-    if the file does not exist yet.
+    Selects rows from ``unknown_questions`` where ``sent_at IS NULL``,
+    ordered by ``created_at``.
 
-    :return: A list of dictionaries, each with ``question`` and
-        ``timestamp`` keys.
+    :return: One dict per pending question, with ``id``, ``question``, and
+        ``timestamp`` (ISO-8601 string) keys.
     :rtype: list[dict]
     """
-    if not os.path.exists(PENDING_FILE):
-        return []
-    entries = []
-    with open(PENDING_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-    return entries
+    with get_pool().connection() as conn:
+        rows = conn.execute(
+            "SELECT id, question, created_at"
+            "  FROM unknown_questions"
+            " WHERE sent_at IS NULL"
+            " ORDER BY created_at"
+        ).fetchall()
+    return [
+        {"id": r[0], "question": r[1], "timestamp": r[2].isoformat()}
+        for r in rows
+    ]
 
 
-def clear_pending(entries):
-    """
-    Archive the given entries and truncate the pending store.
+def mark_sent(ids: list[int]) -> None:
+    """Mark the given questions as sent by setting their ``sent_at`` timestamp.
 
-    Called only after a digest has been sent successfully, so questions are
-    never lost if sending fails.
-
-    :param entries: The pending-question dicts to append to
-        ``ARCHIVE_FILE``. If empty, nothing is written to the archive, but
-        the pending file is still truncated.
-    :type entries: list[dict]
+    :param ids: Primary keys of the ``unknown_questions`` rows to mark
+        sent. If empty, no query is run.
+    :type ids: list[int]
     :return: None
     """
-    if entries:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(ARCHIVE_FILE, "a", encoding="utf-8") as f:
-            for entry in entries:
-                f.write(json.dumps(entry) + "\n")
-    open(PENDING_FILE, "w", encoding="utf-8").close()
+    if not ids:
+        return
+    with get_pool().connection() as conn:
+        conn.execute(
+            "UPDATE unknown_questions SET sent_at = now() WHERE id = ANY(%s)",
+            (ids,),
+        )

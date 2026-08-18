@@ -94,8 +94,7 @@ career-persona/
 │   ├── rate_limit.py                           Inbound rate limits and spend caps for the chat endpoint
 │   ├── mail_utility.py                         Gmail API client wrapper
 │   ├── db.py                                   Postgres connection pool + schema for the unknown_questions table
-│   ├── question_store_db.py                    Postgres-backed pending-question store — used by both tools.py (write) and digest.py (read)
-│   ├── question_store.py                       Legacy JSONL implementation, unused by the app (kept for its own tests only, see Known limitations)
+│   ├── question_store.py                       Postgres-backed pending-question store — used by both tools.py (write) and digest.py (read)
 │   └── digest.py                               Daily digest email and its scheduler
 ├── resources/
 │   ├── summary.txt                             Short bio
@@ -104,10 +103,9 @@ career-persona/
 │   └── SOURAV_GHOSH_LINKEDIN.pdf               LinkedIn export, text extracted into the prompt at runtime
 ├── tests/
 │   ├── conftest.py                             Session-wide test isolation (mail/API stubs, rate-limit reset)
-│   ├── unit/                                   Fast, fully mocked tests
+│   ├── unit/                                   Fast, fully mocked tests, plus a db-marked end-to-end test (needs TEST_DATABASE_URL)
 │   ├── evals/                                  Behavioral evaluations against the real model (deterministic + LLM-judged)
 │   └── sanity_checks/                          Standalone connectivity checks, run manually, not collected by pytest
-├── data/                                       Created at runtime, git-ignored
 ├── requirements.txt                            Runtime dependencies
 ├── requirements-dev.txt                        Runtime plus test dependencies
 ├── pytest.ini                                  Test configuration
@@ -120,10 +118,12 @@ career-persona/
 
 - Python 3.10 or later
 - An Anthropic API key
-- **A reachable Postgres database.** Required to start the app at all —
-  `app.py` calls `services.db.init_db()` unconditionally on startup, before
-  the Gradio server launches, and it will crash immediately if
-  `DATABASE_URL` is unset or unreachable. See [Configuration](#configuration).
+- **A reachable Postgres database, for unanswered-question storage and the
+  daily digest.** `app.py` calls `services.db.init_db()` on startup, before
+  the Gradio server launches; if `DATABASE_URL` is unset or unreachable, the
+  failure is logged and the app starts anyway — chat still works, but
+  `record_unknown_question` and the daily digest will fail until Postgres is
+  reachable. See [Configuration](#configuration).
 - A Google Cloud project with the Gmail API enabled, if you want email notifications
 - A Langfuse account, if you want tracing
 
@@ -174,7 +174,8 @@ Create a `.env` file in the project root. It is git-ignored. Never commit real c
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Postgres — required to start the app at all (see Prerequisites)
+# Postgres — needed for unanswered-question storage and the daily digest;
+# missing/unreachable is logged and non-fatal, chat still works (see Prerequisites)
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 
 GMAIL_CLIENT_ID=your-client-id.apps.googleusercontent.com
@@ -203,7 +204,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 | Variable | Required | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Authenticates calls to the Claude API |
-| `DATABASE_URL` | **Yes** | Postgres connection string for the pending-questions table — the app calls `init_db()` on startup and will not start without it (see [Prerequisites](#prerequisites)) |
+| `DATABASE_URL` | Recommended | Postgres connection string for the pending-questions table — the app calls `init_db()` on startup, but a missing/unreachable value is logged and the app starts anyway; `record_unknown_question` and the daily digest just won't work until it's set (see [Prerequisites](#prerequisites)) |
 | `GMAIL_CLIENT_ID` | For email | OAuth client ID |
 | `GMAIL_CLIENT_SECRET` | For email | OAuth client secret |
 | `GMAIL_REFRESH_TOKEN` | For email | Long-lived token used to mint access tokens |
@@ -219,7 +220,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 | `CHAT_EMAIL_MAX_PER_CALLER` / `CHAT_EMAIL_WINDOW_SECONDS` | Optional | Cap on `record_user_details` emails per visitor (default `2` / `3600`s) |
 | `CHAT_MAX_TRACKED_CALLERS` | Optional | Max visitors tracked per limiter before oldest are evicted (default `10000`) |
 | `CHAT_TRUST_PROXY_HEADER` | Optional | Trust `X-Forwarded-For` for caller identity (default `false`) — only enable behind a proxy you control, see [Rate limiting](#rate-limiting) |
-| `TEST_DATABASE_URL` | For db tests only | Points `tests/unit/test_question_store_db.py` at a throwaway (separate) Postgres instance; those tests are skipped without it |
+| `TEST_DATABASE_URL` | For db tests only | Points `tests/unit/test_question_store.py`'s `db`-marked tests at a throwaway (separate) Postgres instance; those tests are skipped without it |
 | `EVAL_JUDGE_MODEL` | For judged tests only | Judge model for the LLM-judged eval layer (default `claude-sonnet-5`) |
 | `EVAL_JUDGE_SAMPLES` | For judged tests only | Judge calls per case, majority vote (default `1`) |
 
@@ -233,7 +234,7 @@ Gradio serves the chat interface at `http://127.0.0.1:7860` by default.
 
 ### The daily digest
 
-`services/digest.py` emails you a single summary of everything the bot could not answer, scheduled for 9:30 PM IST each day, and reads from the same Postgres table `record_unknown_question` writes to (`unknown_questions`, via `services/question_store_db.py`).
+`services/digest.py` emails you a single summary of everything the bot could not answer, scheduled for 9:30 PM IST each day, and reads from the same Postgres table `record_unknown_question` writes to (`unknown_questions`, via `services/question_store.py`).
 
 `app.py` calls `services.db.init_db()` on startup, before the scheduler starts, which creates the `unknown_questions` table if it doesn't already exist — so a fresh `DATABASE_URL` needs no manual schema setup.
 
@@ -262,12 +263,12 @@ pytest                              # unit tests only: fast, free, no network
 pytest -m live                      # adds both eval layers: calls the real model(s), costs tokens
 pytest -m "live and not judged"     # deterministic only (one model)
 pytest -m judged                    # judged only (LLM-judged, two models per case)
-pytest -m db                        # Postgres-backed tests; needs TEST_DATABASE_URL (currently 0 tests, see below)
+pytest -m db                        # Postgres-backed end-to-end test; needs TEST_DATABASE_URL
 ```
 
 **Unit tests** (`tests/unit/`) cover every module. All external services are mocked. `tests/conftest.py` seeds dummy credentials and stubs the Gmail client for the whole session, so the unit layer cannot make a network call even when a real `.env` file is present.
 
-A fourth marker, `db`, exists for Postgres-backed tests (`tests/unit/test_question_store_db.py`) — skipped without `TEST_DATABASE_URL`, and excluded from a plain `pytest` run either way. As of this writing that file only defines its `clean_table` fixture and has no test functions yet, so `pytest -m db` currently collects zero tests regardless of whether `TEST_DATABASE_URL` is set. That's a real gap now that `question_store_db.py` is the live store for both the write path (`record_unknown_question`) and the read path (the digest) rather than unused scaffolding — nothing currently proves the two round-trip correctly against a real Postgres schema.
+A fourth marker, `db`, covers Postgres-backed tests in `tests/unit/test_question_store.py` — skipped without `TEST_DATABASE_URL`, and excluded from a plain `pytest` run either way. `test_question_lifecycle_store_pending_send_marks_sent` exercises the real round trip end to end: `record_unknown_question` stores a question, `fetch_pending()` confirms it's pending, `send_daily_digest()` runs for real (only the Gmail send is mocked) and marks it sent, and a final `fetch_pending()` confirms it's gone — proving `store_question`/`fetch_pending`/`mark_sent` actually agree on schema against a real Postgres instance, not just against each other's mocks.
 
 **Evaluations** (`tests/evals/`) call the real model through `app.chat()`.
 - **Deterministic** checks behavior deterministically: whether the right tool fired, whether arguments came through intact, and whether the reply avoided forbidden claims.
@@ -283,7 +284,7 @@ pytest --cov=app --cov=services --cov-report=term-missing
 
 ### About the test results
 
-A plain `pytest` run currently reports `69 passed, 47 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
+A plain `pytest` run currently reports `62 passed, 48 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
 
 Treating the test output as a live, up-to-date bug list is deliberate — see `SPEC.md` §12 and §15 for the full breakdown, including a couple of now-fixed bugs whose test docstrings haven't caught up with the fix yet (harmless, just misleading if read on their own).
 
@@ -297,11 +298,11 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 
 **Unanswered questions are batched, not pushed.** An immediate email for every unanswered question would be noise. Batching them into one daily digest makes the list readable, and the questions survive restarts because they are written to Postgres rather than held in memory.
 
-**Postgres for the pending-questions store.** Unanswered questions live in a single `unknown_questions` table (schema owned by `services/db.py`), written by `record_unknown_question` and read by the daily digest. An earlier version of this app used flat JSON Lines files for the same job; that implementation (`services/question_store.py`) is still in the repo but no longer used by the app, see [Known limitations](#known-limitations).
+**Postgres for the pending-questions store.** Unanswered questions live in a single `unknown_questions` table (schema owned by `services/db.py`), written by `record_unknown_question` and read by the daily digest, both via `services/question_store.py`. An earlier version of this app used flat JSON Lines files for the same job under that same module path; the file was rewritten in place to the Postgres implementation rather than kept alongside a separate module, so there's no orphaned legacy store left in the repo.
 
 **One email path.** Immediate notifications and the daily digest both go through the same shared `mail_util` instance of the `MailUtility` class — not just the same class, the same object — and it builds its Gmail service lazily on first send rather than at construction. An earlier version used two different mechanisms for the same job.
 
-**Prompt-injection guardrails.** Visitor text is always treated as a question, never as an instruction that changes the system prompt's rules. Both the system prompt and the `record_user_details` tool description explicitly warn against copying visitor-dictated wording (e.g. a "note" telling the model what to say about them) into a tool call or a reply.
+**Prompt-injection guardrails.** Visitor text is always treated as a question, never as an instruction that changes the system prompt's rules. Both the system prompt and the `record_user_details` tool description explicitly warn against copying visitor-dictated wording (e.g. a "note" telling the model what to say about them) into a tool call or a reply. Declining an instruction-override attempt doesn't excuse answering whatever else is bundled into the same message — that content still gets the normal in-scope/out-of-scope treatment, closing a gap a live eval run caught (`inject_003`, see [Known limitations](#known-limitations)).
 
 **Two eval layers instead of one.** Deterministic assertions are cheap and catch clear-cut regressions (wrong tool, wrong argument, a banned phrase) but can't judge tone or nuance. An LLM judge can, but is itself fallible, so it's checked against hand-labeled calibration cases before its verdicts on real cases are trusted.
 
@@ -328,12 +329,12 @@ All the numbers above are tunable via environment variables (see [Configuration]
 
 ## Known limitations
 
-- **The app now hard-fails on startup without a reachable Postgres database.** `app.py` calls `services.db.init_db()` unconditionally before the Gradio server launches, and it raises immediately if `DATABASE_URL` is unset or unreachable — unlike the Gmail/Langfuse env vars, which fail lazily on first use. See [Prerequisites](#prerequisites).
-- `services/question_store.py`, the earlier JSON-Lines-based pending-questions store, is no longer used by the app (`record_unknown_question` now writes to Postgres instead) but is still in the repo, still has its own passing unit tests, and could read as load-bearing to someone skimming the codebase. Kept for now rather than deleted; see `SPEC.md` §12 for the follow-up note.
+- `app.py` calls `services.db.init_db()` before the Gradio server launches; a missing/unreachable `DATABASE_URL` is caught, logged, and does not stop the app from starting — matching the lazy-failure behavior of the Gmail/Langfuse env vars. `record_unknown_question` and the daily digest will still fail individually until Postgres is reachable, and there's no test covering the degrade-and-continue path (`SPEC.md` §12, item 1). See [Prerequisites](#prerequisites).
+- `services/question_store.py` was rewritten in place from a JSON-Lines file store to the live Postgres implementation, and the separate `services/question_store_db.py` module it briefly lived alongside has been deleted — there's a single store module now, not an orphaned legacy one sitting next to a live one. See `SPEC.md` §12, "Fixed since the last pass".
 - Tools always report `{"recorded": "ok"}` to the model even when the underlying send/store failed; `handle_tool_calls()` catches the exception one layer up but reports it as plain text, not the SDK's `is_error` field — so the model can still tell a visitor "I've noted that down" after a failed send. Tracked by two `xfail(strict=True)` tests (see [Testing](#testing)).
 - The persona name and background-file filenames are hardcoded in `services/profile.py`.
-- Evaluation runs (as of the last recorded deterministic run, on an earlier version of the system prompt and dataset) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reached the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run.
-- The judged layer has since had its first real run: `pytest -m live tests/evals/test_judged_by_llm_cases.py` now reports `15 passed` (12 judged cases + 3 calibration cases). Getting there required fixing two dataset bugs — see `SPEC.md` §12, "Fixed since the last pass" — where a case's `context:` list didn't match what the app's real system prompt actually feeds the model, so the judge failed correct, grounded answers (a real AWS-experience claim, a real relocation detail) that it had no way to verify against the narrower material it was shown.
+- **Full live eval run, current dataset and system prompt:** the first `pytest -m live` run reported `46 passed, 1 failed` across all 47 tests (32 deterministic + 15 judged/calibration). The earlier known gap — the model not always calling `record_unknown_question` for out-of-scope questions — no longer reproduced; none of the `oos_*` cases failed. The one genuine gap found, **`inject_003`** — the persona correctly refused an injected instruction-override but then still answered the off-topic trivia questions bundled into the same message — has since been fixed with an explicit system-prompt sentence (`services/profile.py`) saying that declining the override doesn't excuse answering whatever else rides along with it. A follow-up run of the deterministic layer reports `32 passed, 0 failed`, `inject_003` included. See `SPEC.md` §5/§12/§15.
+- The judged layer's `15 passed` (12 judged cases + 3 calibration cases) came from this same run and required fixing two dataset bugs first — see `SPEC.md` §12, "Fixed since the last pass" — where a case's `context:` list didn't match what the app's real system prompt actually feeds the model, so the judge failed correct, grounded answers (a real AWS-experience claim, a real relocation detail) that it had no way to verify against the narrower material it was shown.
 - Rate-limit state is in-process only, so limits apply per worker and are lost on restart — see [Rate limiting](#rate-limiting).
 
 `SPEC.md` section 12 tracks these in full, with file/line references and, where one exists, the test that pins each one.
@@ -360,4 +361,4 @@ The personal content in `resources/` is **not** covered by that license:
 
 These files are biographical material — © 2026 Sourav Ghosh, all rights reserved. They are included so the project runs as a working demonstration, not as reusable content. If you are reusing this project, replace all four with your own background material as described in [Add your own content](#add-your-own-content).
 
-The same applies to any runtime data under `data/` and to the `unknown_questions` Postgres table, either of which may contain visitor-submitted contact details.
+The same applies to the `unknown_questions` Postgres table, which may contain visitor-submitted contact details.

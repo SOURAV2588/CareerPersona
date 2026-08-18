@@ -1,10 +1,10 @@
 """PostgreSQL-backed storage for unanswered questions.
 
-The database-backed counterpart to :mod:`services.question_store` (which
-uses a JSONL file). Questions are recorded via :func:`store_question` as
-they come in from the chat handler, and read/cleared by the daily digest
-job via :func:`fetch_pending` and :func:`mark_sent`. All access goes
-through the connection pool from :mod:`services.db`.
+Questions are recorded via :func:`store_question` as they come in from the
+chat handler, and read/cleared by the daily digest job via
+:func:`fetch_pending` and :func:`mark_sent`. All access goes through the
+connection pool from :mod:`services.db`. Replaces an earlier JSONL-file
+implementation that lived under this same module path.
 """
 
 from services.db import get_pool

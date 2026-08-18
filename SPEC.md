@@ -2,9 +2,11 @@
 
 Technical specification for the "Career Persona" project. This document reflects
 the codebase as of 2026-08-18 (post error-handling, richer-persona-prompt,
-resource-file rename, judged eval suite, inbound rate-limiting/spend-cap, and
-the Postgres-backed question-store migration — write and read sides now
-reconnected, see §2, §9 — plus MIT licensing, see §16).
+resource-file rename, judged eval suite, inbound rate-limiting/spend-cap, the
+Postgres-backed question-store migration — write and read sides now
+reconnected, see §2, §9 — plus MIT licensing, see §16, and the judged eval
+dataset's context/criteria fixes that produced its first clean full run, see
+§12/§15).
 
 ## 1. Purpose
 
@@ -532,6 +534,33 @@ Ordered roughly by how likely each is to bite in practice.
    but worth aligning if judged runs start showing transient-error noise.
 
 Fixed since the last pass:
+- **The judged eval dataset had two context/criteria gaps that made the judge
+  fail correct answers.** `faith_001`'s and `avail_001`'s `context:` lists in
+  `tests/evals/judged_eval_cases.yaml` didn't match what the real system
+  prompt (`services/profile.py`) actually feeds the model: `faith_001` named
+  only `resources/summary.txt`/`resources/SOURAV_GHOSH_LINKEDIN.pdf`, and
+  `avail_001` named `resources/current_status.md`, a path that doesn't
+  exist — the real file is `resources/CURRENT_STATUS_AND_PREFERENCES.md`.
+  Neither case's context included `resources/SOURAV_GHOSH_CAREER_PROFILE.md`,
+  which is where the "4+ years" AWS claim, the DVA-C02 certification, and the
+  Kolkata/Bangalore relocation detail actually come from. The judge, shown a
+  narrower context than the app itself, failed the persona for stating facts
+  it had no way to verify. `avail_001`'s bug was worse in practice: because
+  the named context file didn't exist, `load_context()`
+  (`tests/evals/test_judged_by_llm_cases.py`) silently `pytest.skip()`-ped
+  the case on every run instead of failing loudly, so it went unnoticed until
+  the full suite was run and a live response happened to include the
+  relocation detail. Fixed by adding
+  `resources/SOURAV_GHOSH_CAREER_PROFILE.md` to both cases' `context:` lists
+  and correcting `avail_001`'s path. Separately, tightened the
+  `known_good_ai_disclaimer` calibration case's criteria (in
+  `test_judged_by_llm_cases.py`) — it was ambiguous enough that the judge
+  treated an honest "I'm a digital stand-in" answer as identifying itself as
+  an AI-like entity; added an explicit carve-out mirroring `persona_002`'s
+  wording (acknowledging a digital stand-in is not the same as identifying as
+  an AI/assistant/language model). `pytest -m live
+  tests/evals/test_judged_by_llm_cases.py` now reports `15 passed` — the
+  judged layer's first clean full run (§15).
 - **The daily digest's producer and consumer now use the same store.**
   `record_unknown_question` (`services/tools.py`) was switched from
   `services.question_store.store_question` (JSONL) to
@@ -740,8 +769,16 @@ in character instead of calling `record_unknown_question`, and once echoed
 an injected note back to the visitor); see `tests/evals/README.md` for the
 full breakdown. Model outputs aren't deterministic and both the system
 prompt and the dataset have changed materially since that run (§5), so a
-re-run — and a first judged run, not yet performed — may look quite
-different. The eval suite is unaffected by the rate-limit changes in
+re-run of the deterministic layer may look quite different.
+
+The judged layer has since had its first full run. Getting a clean run
+required fixing two dataset bugs first — incomplete/incorrect `context:`
+lists on `faith_001` and `avail_001` in `judged_eval_cases.yaml`, plus an
+ambiguous `known_good_ai_disclaimer` calibration criteria — see §12, "Fixed
+since the last pass," for the detail. With those fixed,
+`pytest -m live tests/evals/test_judged_by_llm_cases.py` reports
+`15 passed` (12 judged cases + 3 calibration cases). The eval suite is
+unaffected by the rate-limit changes in
 practice: `tests/evals` calls `app.chat()` directly rather than through
 Gradio, so no `gr.Request` is passed and every eval turn uses the default
 `"unknown"` caller key, but the root `tests/conftest.py`'s autouse

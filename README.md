@@ -40,15 +40,14 @@ Built with Anthropic's Claude API, a Gradio chat interface, the Gmail API for no
       |                                 |
       |                                 +--> record_user_details    --> immediate email (Gmail API,
       |                                 |                                 capped per caller)
-      |                                 +--> record_unknown_question --> data/unknown_questions.jsonl
-      |                                                                         |
-      |                                                                         v
-      |                                                              daily digest email (Gmail API)
-      |                                                                         |
-      |                                                                         v
-      |                                                              data/sent_questions.jsonl
+      |                                 +--> record_unknown_question --> Postgres unknown_questions table
       v
   reply text
+
+  Daily digest (separate, scheduled path, same table as above):
+
+  services/digest.py --> fetch_pending() (Postgres) --> daily digest email (Gmail API) --> mark_sent()
+  (APScheduler, 21:30 IST)                                                                (rows marked sent_at)
 ```
 
 Each chat turn works like this:
@@ -58,14 +57,14 @@ Each chat turn works like this:
 3. Claude answers, or asks to call one of two tools.
 4. If a tool is requested, it runs, the result is fed back, and Claude is called again. This repeats up to `MAX_TOOL_ITERATIONS` (5) times so a misbehaving model cannot loop indefinitely. Every model response's token usage is charged against the daily spend budget as it comes back, including intermediate tool-use round trips, not just the final one.
 5. The final text is returned to the chat window.
-6. If the Anthropic API call fails, or a tool's downstream side effect (email send, file write) raises, `chat()` catches it and returns a short in-character fallback message instead of a crash or a raw traceback. See [Design notes](#design-notes).
+6. If the Anthropic API call fails, or a tool's downstream side effect (email send, database write) raises, `chat()` catches it and returns a short in-character fallback message instead of a crash or a raw traceback. See [Design notes](#design-notes).
 
 The two tools available to the model:
 
 | Tool | Purpose | Effect |
 |---|---|---|
 | `record_user_details` | A visitor shared contact details | Sends you an email right away, capped per visitor so it can't become an open relay to your inbox |
-| `record_unknown_question` | The bot could not answer an in-scope question | Appends the question to a local file for the daily digest |
+| `record_unknown_question` | The bot could not answer an in-scope question | Inserts the question into a Postgres table for the daily digest |
 
 Out-of-scope questions (not about Sourav's professional life at all) are declined in character without calling either tool, so they never reach the digest.
 
@@ -78,7 +77,7 @@ Out-of-scope questions (not about Sourav's professional life at all) are decline
 | UI | Gradio `ChatInterface` |
 | Email | Gmail API with OAuth refresh-token auth |
 | Scheduling | APScheduler cron trigger |
-| Storage | JSON Lines files (no database) |
+| Storage | Postgres, for unanswered questions pending/archived by the daily digest (a legacy JSON Lines implementation is still in the repo but unused, see [Known limitations](#known-limitations)) |
 | Tracing | Langfuse with OpenInference auto-instrumentation |
 | Rate limiting | In-process sliding-window/daily-budget limiter, no external dependency |
 | Testing | pytest, with a separate two-tier live evaluation suite (deterministic + LLM-judged) |
@@ -93,7 +92,9 @@ career-persona/
 │   ├── tools.py                                The two model-callable tools and their schemas
 │   ├── rate_limit.py                           Inbound rate limits and spend caps for the chat endpoint
 │   ├── mail_utility.py                         Gmail API client wrapper
-│   ├── question_store.py                       Read/write/archive unanswered questions
+│   ├── db.py                                   Postgres connection pool + schema for the unknown_questions table
+│   ├── question_store_db.py                    Postgres-backed pending-question store — used by both tools.py (write) and digest.py (read)
+│   ├── question_store.py                       Legacy JSONL implementation, unused by the app (kept for its own tests only, see Known limitations)
 │   └── digest.py                               Daily digest email and its scheduler
 ├── resources/
 │   ├── summary.txt                             Short bio
@@ -117,6 +118,10 @@ career-persona/
 
 - Python 3.10 or later
 - An Anthropic API key
+- **A reachable Postgres database.** Required to start the app at all —
+  `app.py` calls `services.db.init_db()` unconditionally on startup, before
+  the Gradio server launches, and it will crash immediately if
+  `DATABASE_URL` is unset or unreachable. See [Configuration](#configuration).
 - A Google Cloud project with the Gmail API enabled, if you want email notifications
 - A Langfuse account, if you want tracing
 
@@ -167,6 +172,9 @@ Create a `.env` file in the project root. It is git-ignored. Never commit real c
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 
+# Postgres — required to start the app at all (see Prerequisites)
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+
 GMAIL_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GMAIL_CLIENT_SECRET=your-client-secret
 GMAIL_REFRESH_TOKEN=your-refresh-token
@@ -193,6 +201,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 | Variable | Required | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Authenticates calls to the Claude API |
+| `DATABASE_URL` | **Yes** | Postgres connection string for the pending-questions table — the app calls `init_db()` on startup and will not start without it (see [Prerequisites](#prerequisites)) |
 | `GMAIL_CLIENT_ID` | For email | OAuth client ID |
 | `GMAIL_CLIENT_SECRET` | For email | OAuth client secret |
 | `GMAIL_REFRESH_TOKEN` | For email | Long-lived token used to mint access tokens |
@@ -208,6 +217,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 | `CHAT_EMAIL_MAX_PER_CALLER` / `CHAT_EMAIL_WINDOW_SECONDS` | Optional | Cap on `record_user_details` emails per visitor (default `2` / `3600`s) |
 | `CHAT_MAX_TRACKED_CALLERS` | Optional | Max visitors tracked per limiter before oldest are evicted (default `10000`) |
 | `CHAT_TRUST_PROXY_HEADER` | Optional | Trust `X-Forwarded-For` for caller identity (default `false`) — only enable behind a proxy you control, see [Rate limiting](#rate-limiting) |
+| `TEST_DATABASE_URL` | For db tests only | Points `tests/unit/test_question_store_db.py` at a throwaway (separate) Postgres instance; those tests are skipped without it |
 | `EVAL_JUDGE_MODEL` | For judged tests only | Judge model for the LLM-judged eval layer (default `claude-sonnet-5`) |
 | `EVAL_JUDGE_SAMPLES` | For judged tests only | Judge calls per case, majority vote (default `1`) |
 
@@ -221,7 +231,11 @@ Gradio serves the chat interface at `http://127.0.0.1:7860` by default.
 
 ### The daily digest
 
-`services/digest.py` emails you a single summary of everything the bot could not answer, scheduled for 9:30 PM IST each day. Questions are archived after a successful send, and left in place if sending fails so nothing is lost.
+`services/digest.py` emails you a single summary of everything the bot could not answer, scheduled for 9:30 PM IST each day, and reads from the same Postgres table `record_unknown_question` writes to (`unknown_questions`, via `services/question_store_db.py`).
+
+`app.py` calls `services.db.init_db()` on startup, before the scheduler starts, which creates the `unknown_questions` table if it doesn't already exist — so a fresh `DATABASE_URL` needs no manual schema setup.
+
+A successful send marks the sent rows (`sent_at`) rather than deleting them. There's currently no error handling around the send call: a failed send raises, so the affected rows stay unmarked and get retried on the next scheduled run, but (unlike an earlier version of this code) nothing is logged locally when that happens beyond whatever APScheduler's own job executor logs.
 
 **The scheduler runs by default.** `start_scheduler()` is called unconditionally from `app.py`'s `__main__` block, so it starts as soon as you run `python app.py`. It's a no-op background thread until 21:30 IST — nothing is sent immediately, and nothing is sent at all if there are no pending questions.
 
@@ -246,9 +260,12 @@ pytest                              # unit tests only: fast, free, no network
 pytest -m live                      # adds both eval layers: calls the real model(s), costs tokens
 pytest -m "live and not judged"     # deterministic only (one model)
 pytest -m judged                    # judged only (LLM-judged, two models per case)
+pytest -m db                        # Postgres-backed tests; needs TEST_DATABASE_URL (currently 0 tests, see below)
 ```
 
 **Unit tests** (`tests/unit/`) cover every module. All external services are mocked. `tests/conftest.py` seeds dummy credentials and stubs the Gmail client for the whole session, so the unit layer cannot make a network call even when a real `.env` file is present.
+
+A fourth marker, `db`, exists for Postgres-backed tests (`tests/unit/test_question_store_db.py`) — skipped without `TEST_DATABASE_URL`, and excluded from a plain `pytest` run either way. As of this writing that file only defines its `clean_table` fixture and has no test functions yet, so `pytest -m db` currently collects zero tests regardless of whether `TEST_DATABASE_URL` is set. That's a real gap now that `question_store_db.py` is the live store for both the write path (`record_unknown_question`) and the read path (the digest) rather than unused scaffolding — nothing currently proves the two round-trip correctly against a real Postgres schema.
 
 **Evaluations** (`tests/evals/`) call the real model through `app.chat()`.
 - **Deterministic** checks behavior deterministically: whether the right tool fired, whether arguments came through intact, and whether the reply avoided forbidden claims.
@@ -276,9 +293,9 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 
 **Graceful degradation on failure.** `chat()` wraps the whole turn in a `try`/`except`: transient Anthropic errors (rate limit, overload, connection) get one canned "I'm busy" reply, other API errors and any unexpected exception (including a downstream tool failure) get a canned generic reply with a direct-contact fallback. Gradio's own error UI is disabled (`launch(show_error=False)`) since the app already turns every failure into a visitor-facing sentence itself. The Anthropic client is also constructed with `max_retries=4, timeout=30.0`, so many transient failures are retried by the SDK before `chat()` ever sees them.
 
-**Unanswered questions are batched, not pushed.** An immediate email for every unanswered question would be noise. Batching them into one daily digest makes the list readable, and the questions survive restarts because they are written to disk rather than held in memory.
+**Unanswered questions are batched, not pushed.** An immediate email for every unanswered question would be noise. Batching them into one daily digest makes the list readable, and the questions survive restarts because they are written to Postgres rather than held in memory.
 
-**Files instead of a database.** JSON Lines files handle all persistence. For the volume this application sees, a database would add operational overhead without solving a real problem.
+**Postgres for the pending-questions store.** Unanswered questions live in a single `unknown_questions` table (schema owned by `services/db.py`), written by `record_unknown_question` and read by the daily digest. An earlier version of this app used flat JSON Lines files for the same job; that implementation (`services/question_store.py`) is still in the repo but no longer used by the app, see [Known limitations](#known-limitations).
 
 **One email path.** Immediate notifications and the daily digest both go through the same shared `mail_util` instance of the `MailUtility` class — not just the same class, the same object — and it builds its Gmail service lazily on first send rather than at construction. An earlier version used two different mechanisms for the same job.
 
@@ -307,8 +324,9 @@ All the numbers above are tunable via environment variables (see [Configuration]
 
 ## Known limitations
 
+- **The app now hard-fails on startup without a reachable Postgres database.** `app.py` calls `services.db.init_db()` unconditionally before the Gradio server launches, and it raises immediately if `DATABASE_URL` is unset or unreachable — unlike the Gmail/Langfuse env vars, which fail lazily on first use. See [Prerequisites](#prerequisites).
+- `services/question_store.py`, the earlier JSON-Lines-based pending-questions store, is no longer used by the app (`record_unknown_question` now writes to Postgres instead) but is still in the repo, still has its own passing unit tests, and could read as load-bearing to someone skimming the codebase. Kept for now rather than deleted; see `SPEC.md` §12 for the follow-up note.
 - Tools always report `{"recorded": "ok"}` to the model even when the underlying send/store failed; `handle_tool_calls()` catches the exception one layer up but reports it as plain text, not the SDK's `is_error` field — so the model can still tell a visitor "I've noted that down" after a failed send. Tracked by two `xfail(strict=True)` tests (see [Testing](#testing)).
-- `services/digest.py`'s module docstring still describes an older SMTP-based implementation, even though it sends through `MailUtility` (Gmail API/OAuth).
 - The persona name and background-file filenames are hardcoded in `services/profile.py`.
 - Evaluation runs (as of the last recorded deterministic run, on an earlier version of the system prompt and dataset) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reached the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run, and the judged layer (added since) has not yet had a first real run at all.
 - Rate-limit state is in-process only, so limits apply per worker and are lost on restart — see [Rate limiting](#rate-limiting).

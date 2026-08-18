@@ -2,8 +2,9 @@
 
 Technical specification for the "Career Persona" project. This document reflects
 the codebase as of 2026-08-18 (post error-handling, richer-persona-prompt,
-resource-file rename, judged eval suite, and inbound rate-limiting/spend-cap
-changes).
+resource-file rename, judged eval suite, inbound rate-limiting/spend-cap, and
+the Postgres-backed question-store migration — write and read sides now
+reconnected, see §2, §9).
 
 ## 1. Purpose
 
@@ -30,23 +31,41 @@ visitor contact details and flagging questions the persona couldn't answer.
          career profile + prefs +           haiku-4-5)              record_unknown_question)
          LinkedIn PDF)                            │                 │            │
                                     rate_limit.record_usage()   immediate email ──┘            │
-                                    (§7 — charges daily budget) (MailUtility, Gmail API) append to pending
+                                    (§7 — charges daily budget) (MailUtility, Gmail API) insert pending row
                                                                                    ▼
-                                                                     data/unknown_questions.jsonl
+                                                        services/question_store_db.py store_question()
+                                                                                   │
+                                                                                   ▼
+                                                        Postgres unknown_questions table (sent_at IS NULL = pending)
 
 Background (started at process launch, independent of chat requests):
 
 services/digest.py ── APScheduler cron (21:30 IST daily) — enabled by default
         │
         ▼
-services/question_store.py (reads pending JSONL)
+services/question_store_db.py fetch_pending()  (same Postgres table, read side)
         │
         ▼
 services/mail_utility.py (Gmail API) ── daily digest email of unanswered questions
         │
         ▼
-data/sent_questions.jsonl (archive) + pending file truncated
+services/question_store_db.py mark_sent()  (sets sent_at on the rows just emailed)
 ```
+
+**The write side and the read side of the pending-question store are now
+the same store.** They previously weren't:
+`record_unknown_question` wrote to a JSONL file while
+`services/digest.py::send_daily_digest()` had been switched to read from a
+new Postgres table, so nothing the app wrote was ever read and the digest
+was permanently a no-op. Fixed — see §12, "Fixed since the last pass".
+`services/tools.py::record_unknown_question` now calls
+`services.question_store_db.store_question`, the same module
+`services/digest.py` reads from via `fetch_pending()`/`mark_sent()`.
+`app.py`'s `__main__` block also now calls `services.db.init_db()` before
+`start_scheduler()`, so the `unknown_questions` table is created on startup
+rather than only existing via a test fixture. The old JSONL implementation
+(`services/question_store.py`, `data/unknown_questions.jsonl`,
+`data/sent_questions.jsonl`) is no longer used anywhere in the app — see §11.
 
 Both notification paths (`record_user_details`'s immediate email and the daily
 digest) go through the **same shared instance** — `services.mail_utility.mail_util`
@@ -69,11 +88,19 @@ a rejected turn costs nothing beyond the check itself.
 
 - **Language/runtime:** Python 3.10+ (uses `venv/`), no build step.
 - **`app.py`** — the sole entry point. Defines `chat()`/`_chat()`, wires up
-  tracing, starts the digest scheduler, and launches the Gradio
-  `ChatInterface`.
-- **Run command:** `python app.py` (loads `.env`, starts the digest
-  scheduler, opens a local Gradio web server, default
+  tracing, initializes the Postgres schema, starts the digest scheduler, and
+  launches the Gradio `ChatInterface`.
+- **Run command:** `python app.py` (loads `.env`, calls `services.db.init_db()`,
+  starts the digest scheduler, opens a local Gradio web server, default
   `http://127.0.0.1:7860`).
+- **`DATABASE_URL` is now a hard startup requirement, not a soft one.**
+  `init_db()` runs unconditionally in `__main__` before the Gradio server
+  ever starts (§9), and it calls `services.db.get_pool()`, which raises
+  `RuntimeError("DATABASE_URL is not set")` immediately if the env var is
+  missing — unlike the Gmail env vars, which only fail lazily on the first
+  actual send (§8). A fresh clone with a `.env` missing `DATABASE_URL` (or
+  pointing at an unreachable Postgres instance) will crash on `python
+  app.py` before the chat UI ever comes up.
 
 ## 4. Core chat flow (`app.py`)
 
@@ -138,7 +165,7 @@ a rejected turn costs nothing beyond the check itself.
    `tool_name` similarly returns `{"error": f"Tool not found: {tool_name}"}`.
    In both cases the error is returned as a plain string inside the
    `tool_result`'s `content` field, **not** via the Anthropic tool_result
-   envelope's `is_error` field — see §12, item 1.
+   envelope's `is_error` field — see §12, item 2.
 8. The final assistant text blocks are concatenated into the reply. If a turn
    ends with only a tool call and no visible text, a canned acknowledgement
    ("Thanks — I've noted that down...") is returned instead of an empty
@@ -203,7 +230,7 @@ wrapped with `@observe()` for Langfuse tracing:
 | Tool | Required args | Optional args | Effect |
 |---|---|---|---|
 | `record_user_details` | `email` | `name`, `notes` | Sends an **immediate** email via `MailUtility`, subject `"Career Persona — interest received [<date>]"`. Capped per caller by `rate_limit.check_contact_email()` (§7) — see below. |
-| `record_unknown_question` | `question` | — | Calls `store_question(...)`, appending to `data/unknown_questions.jsonl` for the nightly digest. |
+| `record_unknown_question` | `question` | — | Calls `store_question(...)` (`services.question_store_db.store_question`), inserting a row into the Postgres `unknown_questions` table for the nightly digest — see §9. |
 
 `record_user_details` calls `rate_limit.check_contact_email(rate_limit.get_current_caller())`
 (§7) before sending. If the caller has already triggered
@@ -230,12 +257,13 @@ instead, per §4 item 6, but the tool function itself has no concept of
 partial failure).
 
 `record_unknown_question` stores `f"Recording unknown question: {question}"`
-— the literal prefix, not just the raw question — as the `question` field.
-This is pinned by `tests/unit/test_tools.py::TestRecordUnknownQuestion::
+— the literal prefix, not just the raw question — as the `question` column
+value in the Postgres `unknown_questions` table (§9, §11). This is pinned by
+`tests/unit/test_tools.py::TestRecordUnknownQuestion::
 test_stores_question_with_recording_prefix`, i.e. it reads as
 intentional/expected behavior rather than an unnoticed bug, though it still
-means the stored/archived JSONL and the eventual digest email read "Recording
-unknown question: <question>" rather than just the question text.
+means the eventual digest email reads "Recording unknown question:
+<question>" rather than just the question text.
 
 ## 7. Rate limiting & spend caps (`services/rate_limit.py`)
 
@@ -350,28 +378,59 @@ workers.
 - This is the single Gmail-sending mechanism used by both the immediate
   notification path (`tools.py`) and the daily digest (`digest.py`).
 
-## 9. Daily digest (`services/digest.py`, `services/question_store.py`)
+## 9. Daily digest (`services/digest.py`, `services/question_store_db.py`, `services/db.py`)
 
-- `store_question` (called from `record_unknown_question`) is the sole
-  producer for the pending store.
+- `store_question` in `services/question_store_db.py` (called from
+  `record_unknown_question`, §6) is now the sole producer for the pending
+  store — it inserts a row into the Postgres `unknown_questions` table. This
+  replaces the old JSONL-based `services/question_store.py::store_question`,
+  which is no longer called anywhere in the app (§11, §12 "Fixed since the
+  last pass").
+- `app.py`'s `__main__` block calls `services.db.init_db()` before
+  `start_scheduler()` (§3), so the `unknown_questions` table
+  (`id BIGSERIAL PRIMARY KEY, question TEXT NOT NULL, created_at TIMESTAMPTZ
+  DEFAULT now(), sent_at TIMESTAMPTZ`, plus a partial index on `created_at
+  WHERE sent_at IS NULL`) is created on startup if it doesn't already exist.
+  `init_db()` is idempotent (`CREATE TABLE IF NOT EXISTS`).
 - `start_scheduler()` is called unconditionally from `app.py`'s `__main__`
   block — **the digest scheduler runs by default**, not opt-in. It starts an
   **APScheduler** `BackgroundScheduler` with a cron trigger firing daily at
   **21:30 Asia/Kolkata**, idempotent (`id="daily_digest"`,
   `replace_existing=True`; a module-level `_scheduler` guard prevents
   double-start within one process).
-- `send_daily_digest()`: reads pending entries from
-  `data/unknown_questions.jsonl` (JSON Lines, one `{question, timestamp}` per
-  line); if empty, no-ops. Otherwise builds a plain-text digest body and sends
-  it via the shared `services.mail_utility.mail_util` singleton (same
-  instance `tools.py` uses for immediate notifications) through the Gmail
-  API.
-- On successful send, entries are archived to `data/sent_questions.jsonl` and
-  the pending file is truncated. On failure (send exception), pending entries
-  are left in place to roll over to the next scheduled run — at-least-once
-  delivery, no duplicate-suppression beyond that.
-- The module docstring at the top of `digest.py` still says questions "are
-  emailed via Gmail SMTP" — inaccurate; see §12, item 2.
+- `send_daily_digest()` reads pending entries via
+  `services.question_store_db.fetch_pending()` — a Postgres query
+  (`SELECT id, question, created_at FROM unknown_questions WHERE sent_at IS
+  NULL ORDER BY created_at`) against a connection pool built by
+  `services/db.py::get_pool()` from the `DATABASE_URL` env var (§14). If
+  `fetch_pending()` returns `[]`, the function returns immediately, with no
+  log line either way — there is no "skipping digest" print on the empty
+  path (unlike the old JSONL implementation).
+- On a non-empty `fetch_pending()` result, `send_daily_digest()` builds the
+  digest body (`_build_message_subject_and_body`, unchanged logic) and calls
+  `mail_util.send_email(subject, body)` — through the same shared
+  `services.mail_utility.mail_util` singleton `tools.py` uses. On success,
+  `mark_sent([q["id"] for q in pending])` runs an `UPDATE ... SET sent_at =
+  now() WHERE id = ANY(%s)` against the fetched ids — rows are marked sent,
+  not deleted.
+- **There is no try/except around the send call.** A `send_email()`
+  exception propagates straight out of `send_daily_digest()`; nothing gets
+  marked sent, so the same rows are retried on the next scheduled run.
+  APScheduler's job executor catches and logs the exception itself rather
+  than crashing the process, but there is no application-level log line
+  marking the failure the way the old JSONL implementation had one
+  (`"Failed to send digest email: {e}"`). This is exercised by
+  `TestSendDailyDigest::test_send_failure_propagates_and_leaves_pending_unmarked`
+  in `tests/unit/test_digest.py`, which asserts the exception propagates
+  rather than being caught.
+- **Not covered by any test that exercises a real Postgres round-trip.**
+  `tests/unit/test_digest.py` mocks `digest.fetch_pending`/`digest.mark_sent`
+  directly, so it verifies `send_daily_digest()`'s logic in isolation but
+  never proves `question_store_db.store_question()` and
+  `question_store_db.fetch_pending()` actually agree on schema/columns
+  against a real database. `tests/unit/test_question_store_db.py` is the
+  file meant to cover that and currently has no test functions at all — see
+  §15.
 
 ## 10. Observability (Langfuse / OpenInference)
 
@@ -398,18 +457,35 @@ workers.
 
 ## 11. Data storage
 
-| Path | Format | Purpose | Lifecycle |
+| Path / table | Format | Purpose | Lifecycle |
 |---|---|---|---|
-| `data/unknown_questions.jsonl` | JSON Lines | Pending unanswered questions awaiting digest | Appended by `store_question` (called from `record_unknown_question`); cleared after successful digest send |
-| `data/sent_questions.jsonl` | JSON Lines | Archive of already-digested questions | Append-only |
+| `unknown_questions` (Postgres table, schema in `services/db.py`) | Postgres | Pending/archived unanswered questions — columns `id`, `question`, `created_at`, `sent_at` (NULL = pending) | Inserted by `services.question_store_db.store_question` (called from `record_unknown_question`, §6); read by `fetch_pending()` and marked sent by `mark_sent()` in `services/digest.py` (§9) — the live, single store |
+| `data/unknown_questions.jsonl` | JSON Lines | Legacy pending-questions file from the pre-Postgres implementation | **Orphaned.** `services/question_store.py::store_question` still writes here if called, but nothing in the app calls it any more; `read_pending`/`clear_pending` are unused. Still covered by its own unit test (`tests/unit/test_question_store.py`), which tests the module in isolation, not as part of the app's live path |
+| `data/sent_questions.jsonl` | JSON Lines | Legacy archive from the pre-Postgres digest flow | Orphaned along with the above — nothing writes to it any more |
 
-No database is used; all persistence is flat-file, gitignored (`data/`).
+Persistence for unanswered questions is now a single Postgres table
+(`unknown_questions`, via `services/db.py`'s connection pool,
+`DATABASE_URL`), with `services/question_store.py`'s JSONL implementation
+left in the codebase but unused by the running app — see §12, "Fixed since
+the last pass".
 
 ## 12. Known errors / issues (as observed in code)
 
 Ordered roughly by how likely each is to bite in practice.
 
-1. **Tool failures are reported via a plain `{"error": ...}` string, not the
+1. **`python app.py` now hard-fails on startup without a reachable
+   `DATABASE_URL`.** `init_db()` runs unconditionally before the Gradio
+   server starts (§3, §9); `services.db.get_pool()` raises `RuntimeError`
+   immediately if `DATABASE_URL` is unset, and `psycopg`'s connect will
+   raise if it's set but unreachable. This is a behavior change from every
+   other external dependency in the app (Gmail, Langfuse, Anthropic), which
+   fail lazily on first use rather than blocking startup. A fresh clone
+   following only the Gmail/Langfuse setup steps in `README.md`, without
+   also standing up Postgres and setting `DATABASE_URL`, will not start.
+   Not covered by any test (`tests/unit/test_app_chat.py` etc. never invoke
+   `app.py`'s `__main__` block). See §3, §14.
+
+2. **Tool failures are reported via a plain `{"error": ...}` string, not the
    SDK's `is_error` field.** `handle_tool_calls()` (§4, item 6) prevents a
    downstream exception from crashing the turn, but the model is not told
    the call failed in the way the Anthropic tool-use API is designed for
@@ -421,11 +497,6 @@ Ordered roughly by how likely each is to bite in practice.
    `test_tool_failure_is_not_reported_as_success` and
    `test_unknown_tool_is_reported_with_the_sdks_is_error_field`. These are
    the *only* two non-green results in a plain `pytest` run — see §15.
-
-2. **Stale module docstring in `services/digest.py`.** It still claims
-   pending questions "are emailed via Gmail SMTP and then archived," but the
-   implementation sends through `MailUtility` (Gmail API/OAuth) and never
-   uses `smtplib`.
 
 3. **Stale bug narratives in test docstrings
    (`tests/unit/test_app_chat.py`, `tests/unit/test_app_tool_dispatch.py`).**
@@ -442,17 +513,47 @@ Ordered roughly by how likely each is to bite in practice.
    inaccurate picture of what's broken — the actual `pytest` run (§15) is
    the source of truth, not these docstrings.
 
-4. **The judged suite's judge client is constructed without the retry/timeout
+4. **`services/question_store.py` (the JSONL implementation) is now dead
+   code from the app's perspective.** Nothing calls `store_question`,
+   `read_pending`, or `clear_pending` any more — `record_unknown_question`
+   was repointed at `services.question_store_db.store_question` (§6, §9,
+   §11). The module and `data/unknown_questions.jsonl`/
+   `data/sent_questions.jsonl` are still present, and
+   `tests/unit/test_question_store.py` still exercises the module directly,
+   which can read as "this is load-bearing" to someone skimming the test
+   suite when it no longer is. Not deleted as part of this fix; worth a
+   follow-up decision (delete vs. keep as a documented fallback).
+
+5. **The judged suite's judge client is constructed without the retry/timeout
    tuning the app's own client uses (`tests/evals/llm_judge.py::judge`).**
    `anthropic.Anthropic()` is called bare, unlike `app.py`'s
    `anthropic.Anthropic(max_retries=4, timeout=30.0)`. Minor and test-only —
    a flaky judge call fails the eval run rather than degrading gracefully —
    but worth aligning if judged runs start showing transient-error noise.
 
-5. **No `LICENSE` file.** Not a functional bug, but worth flagging if the
+6. **No `LICENSE` file.** Not a functional bug, but worth flagging if the
    project is ever meant to be shared or reused publicly.
 
 Fixed since the last pass:
+- **The daily digest's producer and consumer now use the same store.**
+  `record_unknown_question` (`services/tools.py`) was switched from
+  `services.question_store.store_question` (JSONL) to
+  `services.question_store_db.store_question` (Postgres) — the same module
+  `services/digest.py`'s `fetch_pending()`/`mark_sent()` already read
+  from/wrote to. Previously these were pointed at two different stores, so
+  `fetch_pending()` always returned `[]` and the digest was a permanent
+  no-op regardless of how many unanswered questions accumulated. `app.py`'s
+  `__main__` block now also calls `services.db.init_db()` before
+  `start_scheduler()`, so the `unknown_questions` table is created on
+  startup rather than only via a test fixture. See §2, §9, §11. Not yet
+  covered by a dedicated test that exercises a real Postgres round-trip —
+  see §9's last bullet and §15.
+- `services/digest.py`'s module docstring is now accurate — it describes
+  sending via the Gmail API and marking rows sent, rather than the old
+  "Gmail SMTP ... archived" language that no longer matched either the
+  transport or the read path. The commented-out legacy JSONL
+  `send_daily_digest()` and its now-dead imports (`read_pending`,
+  `clear_pending`, `date`) were removed from the file at the same time.
 - `GMAIL_RECIPIENT` is now validated — `MailUtility.send_email()` raises a
   clear `RuntimeError` up front if it's unset/empty, instead of failing later
   with an opaque `EmailMessage` serialization error (see §8). Pinned by
@@ -465,6 +566,10 @@ Fixed since the last pass:
   `tests/unit/test_mail_utility.py::test_init_does_not_build_service_eagerly`,
   `test_service_is_built_lazily_on_first_use_and_then_cached`, and the
   updated `tests/unit/test_digest.py::TestSendDailyDigest` cases.
+- `pytest.ini`'s `--strict-markers` flag, briefly dropped in the same change
+  that added the `db` marker, has been restored (§15) — an
+  unregistered/misspelled marker is a hard collection error again, not a
+  silent no-op.
 
 ## 13. External dependencies
 
@@ -479,6 +584,7 @@ From `requirements.txt`:
 | `requests` (2.32.5) | HTTP client — no active call site in `services/` or `app.py`; likely an unused direct dependency now that the legacy Pushover notifier has been removed |
 | `google-auth`, `google-auth-oauthlib`, `google-api-python-client` | Gmail API OAuth client + service build |
 | `apscheduler` (3.11.0), `pytz` (2025.2) | Cron-style background scheduling for the daily digest; `pytz` is also used by `services/rate_limit.py`'s `DailyBudget` for the same Asia/Kolkata midnight rollover (§7) |
+| `psycopg[binary]` (3.2.10), `psycopg-pool` (3.2.6) | Postgres client + connection pooling for `services/db.py`'s `unknown_questions` table (§9, §11) — used by both `record_unknown_question`'s write path and the digest's read path, plus `tests/unit/test_question_store_db.py`'s fixture |
 | `langfuse` | LLM tracing/observability backend client |
 | `openinference-instrumentation-anthropic` | Auto-instruments the Anthropic SDK for Langfuse/OpenTelemetry tracing |
 
@@ -510,6 +616,8 @@ Loaded from a gitignored `.env` file via `python-dotenv`:
 | `CHAT_EMAIL_MAX_PER_CALLER`, `CHAT_EMAIL_WINDOW_SECONDS` | `rate_limit.py` | Per-caller cap on `record_user_details` notification emails (default `2` / `3600`s) — optional (§6, §7) |
 | `CHAT_MAX_TRACKED_CALLERS` | `rate_limit.py` | Bound on tracked caller keys per sliding-window limiter, LRU-evicted beyond it (default `10_000`) — optional (§7) |
 | `CHAT_TRUST_PROXY_HEADER` | `rate_limit.py` | Whether `caller_key()` trusts `X-Forwarded-For` (default `false`) — **only enable behind a proxy you control**; otherwise a visitor can forge it to mint a fresh quota (§7) |
+| `DATABASE_URL` | `services/db.py` (`get_pool()`), called from `app.py`'s `__main__` via `init_db()` | Postgres connection string for the `unknown_questions` table (§9, §11) — **required to start the app at all**: `init_db()` runs unconditionally before the Gradio server launches (§3) and raises `RuntimeError("DATABASE_URL is not set")` immediately if missing (§12, item 1). Also required at runtime by `record_unknown_question` (write path) and `services/digest.py::send_daily_digest()` (read path) |
+| `TEST_DATABASE_URL` | `tests/unit/test_question_store_db.py` | Points the `db`-marked test file at a real (throwaway) Postgres instance; those tests are skipped via `pytest.mark.skipif` when unset, and excluded from a plain `pytest` run regardless via `addopts` (§15) |
 | `EVAL_JUDGE_MODEL` | `tests/evals/llm_judge.py` | Overrides the judge model (default `claude-sonnet-5`) — test-only, not needed to run the app |
 | `EVAL_JUDGE_SAMPLES` | `tests/evals/llm_judge.py` | Number of judge calls per judged case, majority-vote (default `1`) — test-only |
 
@@ -518,7 +626,8 @@ default, read via `rate_limit.py`'s `_int_env`/`_bool_env` helpers, which
 fall back to the default (and log a warning) on a non-integer value rather
 than raising.
 
-No other environment variables are referenced anywhere in the current code.
+No other environment variables are referenced anywhere in the current code
+(beyond `DATABASE_URL`/`TEST_DATABASE_URL` above).
 
 There is no `client_secret.json` or other OAuth secret file in the working
 tree at this point — if one is (re)introduced, it should be added to
@@ -526,12 +635,15 @@ tree at this point — if one is (re)introduced, it should be added to
 
 ## 15. Testing
 
-Two layers under `tests/`, both run with `pytest` from the repo root. There
-is exactly one `pytest.ini` in the repo (at the root); it registers the
-`unit`/`live`/`judged` markers, sets `--strict-markers` (an unregistered
-marker fails collection rather than being silently accepted), and defaults
-`addopts` to `-m "not live"`, so a plain `pytest` run never makes a real API
-call or costs tokens.
+Two layers under `tests/`, plus a third, currently-empty one, all run with
+`pytest` from the repo root. There is exactly one `pytest.ini` in the repo
+(at the root); it registers the `unit`/`live`/`judged`/`db` markers, sets
+`--strict-markers` (an unregistered marker fails collection rather than
+being silently accepted), and defaults `addopts` to `-m "not live and not
+db"`, so a plain `pytest` run never makes a real API call, never touches a
+real Postgres database, and never costs tokens. `--strict-markers` was
+briefly dropped in the same change that added the `db` marker, and has
+since been restored (§12, "Fixed since the last pass").
 
 - **`tests/unit/`** — fast, deterministic, no network, marked
   `pytest.mark.unit`. Every module under `services/` has a matching test
@@ -565,6 +677,22 @@ call or costs tokens.
   `python_files = test_*.py` setting in `pytest.ini` only matches
   `test_*.py`, not `*_test.py`, so this manual-run script is safely excluded
   from every automated run despite its `test_generation()` function name.
+- **`tests/unit/test_question_store_db.py`** — marked `pytest.mark.db`,
+  skipped via `pytest.mark.skipif` unless `TEST_DATABASE_URL` is set, and
+  excluded from a plain `pytest` run by `addopts` either way. Its
+  `clean_table` fixture points `DATABASE_URL` at `TEST_DATABASE_URL`, forces
+  a fresh connection pool, calls `services.db.init_db()`, and truncates the
+  `unknown_questions` table before each test. As of this writing the file
+  defines only that fixture — **no test functions exist yet** — so `pytest
+  -m db` currently collects and runs zero tests regardless of whether
+  `TEST_DATABASE_URL` is set (verified: `pytest -m db -v` reports `0
+  selected`). This gap matters more than it used to: `question_store_db.py`
+  is now the live pending-question store for both the write path
+  (`record_unknown_question`) and the read path (the digest, §9) rather than
+  unused scaffolding, and nothing currently proves `store_question()` and
+  `fetch_pending()`/`mark_sent()` actually round-trip correctly against a
+  real Postgres schema. Run it (once tests are added) with:
+  `TEST_DATABASE_URL=postgresql://... pytest -m db`.
 - **`tests/evals/`** — behavioral evals against the real model, marked
   `pytest.mark.live`, run explicitly with `pytest -m live`. Two layers:
   - **Deterministic** (`test_deterministic_cases.py` + `deterministic_eval_cases.yaml`'s
@@ -596,12 +724,14 @@ push) or `pytest -m live` (adds the deterministic and judged layers, on
 demand — costs tokens; the judged layer costs tokens on two models per case).
 
 **Current state (verified by running `pytest -q` against this checkout):**
-`69 passed, 47 deselected, 2 xfailed`. The 2 `xfail(strict=True)` are the
-accepted, still-open `is_error` gap described in §12, item 1 —
-`strict=True` means the run would break (turn red) if either were ever
-fixed without removing its marker, so a fix can't silently go unnoticed.
-That's the whole non-green surface of the default test run: nothing is
-currently failing unexpectedly. (The unit-test count rose from 49 to 69
+`69 passed, 47 deselected, 2 xfailed`. The 47 deselected are all `live`
+(the two eval layers) — the `db`-marked file contributes zero collected
+tests either way (see above), so it doesn't change this count. The 2
+`xfail(strict=True)` are the accepted, still-open `is_error` gap described
+in §12, item 2 — `strict=True` means the run would break (turn red) if
+either were ever fixed without removing its marker, so a fix can't silently
+go unnoticed. That's the whole non-green surface of the default test run:
+nothing is currently failing unexpectedly. (The unit-test count rose from 49 to 69
 mainly on the addition of `test_rate_limit.py`'s 22 cases, net of a handful
 of file moves/removals around the Langfuse sanity check described above.)
 

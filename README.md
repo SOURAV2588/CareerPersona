@@ -16,6 +16,7 @@ Built with Anthropic's Claude API, a Gradio chat interface, the Gmail API for no
 - [Running the app](#running-the-app)
 - [Testing](#testing)
 - [Design notes](#design-notes)
+- [Rate limiting](#rate-limiting)
 - [Known limitations](#known-limitations)
 - [Further documentation](#further-documentation)
 
@@ -28,17 +29,17 @@ Built with Anthropic's Claude API, a Gradio chat interface, the Gmail API for no
   Gradio ChatInterface
       |
       v
-  app.chat()  ------------------> app._chat() --> Anthropic Messages API
-      |   (catches API/tool             |            (claude-haiku-4-5)
-      |    errors -> fallback           |   ^
-      |    message, see below)          |   +------ tool results ----------+
+  app.chat()  ---> rate_limit.check_chat_turn() --> app._chat() --> Anthropic Messages API
+      |   (catches API/tool          (rejects before any            |          (claude-haiku-4-5)
+      |    errors -> fallback         API call is made)              |   ^
+      |    message, see below)                                      |   +------ tool results ----------+
       |                                 |                                  |
       |                                 |                          model requests a tool
       |                                 v                                  |
       |                         app.handle_tool_calls()  <-----------------+
       |                                 |
-      |                                 +--> record_user_details    --> immediate email (Gmail API)
-      |                                 |
+      |                                 +--> record_user_details    --> immediate email (Gmail API,
+      |                                 |                                 capped per caller)
       |                                 +--> record_unknown_question --> data/unknown_questions.jsonl
       |                                                                         |
       |                                                                         v
@@ -52,17 +53,18 @@ Built with Anthropic's Claude API, a Gradio chat interface, the Gmail API for no
 
 Each chat turn works like this:
 
-1. The system prompt is rebuilt from your background files and sent as a top-level `system` parameter with prompt caching enabled.
-2. Claude answers, or asks to call one of two tools.
-3. If a tool is requested, it runs, the result is fed back, and Claude is called again. This repeats up to `MAX_TOOL_ITERATIONS` (5) times so a misbehaving model cannot loop indefinitely.
-4. The final text is returned to the chat window.
-5. If the Anthropic API call fails, or a tool's downstream side effect (email send, file write) raises, `chat()` catches it and returns a short in-character fallback message instead of a crash or a raw traceback. See [Design notes](#design-notes).
+1. `rate_limit.check_chat_turn()` runs first, before anything else touches the network: an oversized message, a caller sending turns too fast, or a global daily turn/token budget being exhausted all get rejected here with a short in-character reply — no Anthropic API call, no cost. See [Rate limiting](#rate-limiting).
+2. The system prompt is rebuilt from your background files and sent as a top-level `system` parameter with prompt caching enabled.
+3. Claude answers, or asks to call one of two tools.
+4. If a tool is requested, it runs, the result is fed back, and Claude is called again. This repeats up to `MAX_TOOL_ITERATIONS` (5) times so a misbehaving model cannot loop indefinitely. Every model response's token usage is charged against the daily spend budget as it comes back, including intermediate tool-use round trips, not just the final one.
+5. The final text is returned to the chat window.
+6. If the Anthropic API call fails, or a tool's downstream side effect (email send, file write) raises, `chat()` catches it and returns a short in-character fallback message instead of a crash or a raw traceback. See [Design notes](#design-notes).
 
 The two tools available to the model:
 
 | Tool | Purpose | Effect |
 |---|---|---|
-| `record_user_details` | A visitor shared contact details | Sends you an email right away |
+| `record_user_details` | A visitor shared contact details | Sends you an email right away, capped per visitor so it can't become an open relay to your inbox |
 | `record_unknown_question` | The bot could not answer an in-scope question | Appends the question to a local file for the daily digest |
 
 Out-of-scope questions (not about Sourav's professional life at all) are declined in character without calling either tool, so they never reach the digest.
@@ -78,6 +80,7 @@ Out-of-scope questions (not about Sourav's professional life at all) are decline
 | Scheduling | APScheduler cron trigger |
 | Storage | JSON Lines files (no database) |
 | Tracing | Langfuse with OpenInference auto-instrumentation |
+| Rate limiting | In-process sliding-window/daily-budget limiter, no external dependency |
 | Testing | pytest, with a separate two-tier live evaluation suite (deterministic + LLM-judged) |
 
 ## Project structure
@@ -88,19 +91,20 @@ career-persona/
 ├── services/
 │   ├── profile.py                             Builds the system prompt from background files; fallback message strings
 │   ├── tools.py                                The two model-callable tools and their schemas
+│   ├── rate_limit.py                           Inbound rate limits and spend caps for the chat endpoint
 │   ├── mail_utility.py                         Gmail API client wrapper
 │   ├── question_store.py                       Read/write/archive unanswered questions
-│   ├── digest.py                               Daily digest email and its scheduler
-│   └── langfuse_test.py                        Standalone Langfuse connectivity check
+│   └── digest.py                               Daily digest email and its scheduler
 ├── resources/
 │   ├── summary.txt                             Short bio
 │   ├── SOURAV_GHOSH_CAREER_PROFILE.md          Detailed, structured career profile
 │   ├── CURRENT_STATUS_AND_PREFERENCES.md       Notice period, relocation, role type, redirect policy
 │   └── SOURAV_GHOSH_LINKEDIN.pdf               LinkedIn export, text extracted into the prompt at runtime
 ├── tests/
-│   ├── conftest.py                             Session-wide test isolation
+│   ├── conftest.py                             Session-wide test isolation (mail/API stubs, rate-limit reset)
 │   ├── unit/                                   Fast, fully mocked tests
-│   └── evals/                                  Behavioral evaluations against the real model (deterministic + LLM-judged)
+│   ├── evals/                                  Behavioral evaluations against the real model (deterministic + LLM-judged)
+│   └── sanity_checks/                          Standalone connectivity checks, run manually, not collected by pytest
 ├── data/                                       Created at runtime, git-ignored
 ├── requirements.txt                            Runtime dependencies
 ├── requirements-dev.txt                        Runtime plus test dependencies
@@ -171,6 +175,19 @@ GMAIL_RECIPIENT=you@example.com
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
+
+# Rate limiting — all optional, shown with their defaults
+# CHAT_MESSAGE_MAX_CHARS=2000
+# CHAT_BURST_MAX_TURNS=5
+# CHAT_BURST_WINDOW_SECONDS=60
+# CHAT_SUSTAINED_MAX_TURNS=40
+# CHAT_SUSTAINED_WINDOW_SECONDS=3600
+# CHAT_GLOBAL_DAILY_TURNS=750
+# CHAT_GLOBAL_DAILY_TOKENS=5000000
+# CHAT_EMAIL_MAX_PER_CALLER=2
+# CHAT_EMAIL_WINDOW_SECONDS=3600
+# CHAT_MAX_TRACKED_CALLERS=10000
+# CHAT_TRUST_PROXY_HEADER=false
 ```
 
 | Variable | Required | Purpose |
@@ -183,6 +200,14 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 | `LANGFUSE_PUBLIC_KEY` | For tracing | Langfuse project key |
 | `LANGFUSE_SECRET_KEY` | For tracing | Langfuse project secret |
 | `LANGFUSE_BASE_URL` | For tracing | Langfuse endpoint |
+| `CHAT_MESSAGE_MAX_CHARS` | Optional | Max chars per chat message (default `2000`) |
+| `CHAT_BURST_MAX_TURNS` / `CHAT_BURST_WINDOW_SECONDS` | Optional | Per-visitor burst window (default `5` turns / `60`s) |
+| `CHAT_SUSTAINED_MAX_TURNS` / `CHAT_SUSTAINED_WINDOW_SECONDS` | Optional | Per-visitor sustained window (default `40` turns / `3600`s) |
+| `CHAT_GLOBAL_DAILY_TURNS` | Optional | Site-wide daily turn cap (default `750`) |
+| `CHAT_GLOBAL_DAILY_TOKENS` | Optional | Site-wide daily token budget (default `5000000`) |
+| `CHAT_EMAIL_MAX_PER_CALLER` / `CHAT_EMAIL_WINDOW_SECONDS` | Optional | Cap on `record_user_details` emails per visitor (default `2` / `3600`s) |
+| `CHAT_MAX_TRACKED_CALLERS` | Optional | Max visitors tracked per limiter before oldest are evicted (default `10000`) |
+| `CHAT_TRUST_PROXY_HEADER` | Optional | Trust `X-Forwarded-For` for caller identity (default `false`) — only enable behind a proxy you control, see [Rate limiting](#rate-limiting) |
 | `EVAL_JUDGE_MODEL` | For judged tests only | Judge model for the LLM-judged eval layer (default `claude-sonnet-5`) |
 | `EVAL_JUDGE_SAMPLES` | For judged tests only | Judge calls per case, majority vote (default `1`) |
 
@@ -209,7 +234,7 @@ python -m services.digest
 To verify your Langfuse connection:
 
 ```bash
-python -m services.langfuse_test
+python -m tests.sanity_checks.langfuse_test
 ```
 
 ## Testing
@@ -239,9 +264,9 @@ pytest --cov=app --cov=services --cov-report=term-missing
 
 ### About the test results
 
-A plain `pytest` run currently reports `49 passed, 47 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
+A plain `pytest` run currently reports `69 passed, 47 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
 
-Treating the test output as a live, up-to-date bug list is deliberate — see `SPEC.md` §11 and §14 for the full breakdown, including a couple of now-fixed bugs whose test docstrings haven't caught up with the fix yet (harmless, just misleading if read on their own).
+Treating the test output as a live, up-to-date bug list is deliberate — see `SPEC.md` §12 and §15 for the full breakdown, including a couple of now-fixed bugs whose test docstrings haven't caught up with the fix yet (harmless, just misleading if read on their own).
 
 ## Design notes
 
@@ -261,15 +286,35 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 
 **Two eval layers instead of one.** Deterministic assertions are cheap and catch clear-cut regressions (wrong tool, wrong argument, a banned phrase) but can't judge tone or nuance. An LLM judge can, but is itself fallible, so it's checked against hand-labeled calibration cases before its verdicts on real cases are trusted.
 
+## Rate limiting
+
+`services/rate_limit.py` protects the public chat endpoint from both abuse and runaway API spend. `chat()` checks every turn against a stack of guards, cheapest first, so a rejected turn never reaches the Anthropic API:
+
+| Guard | Default | What it stops |
+|---|---|---|
+| Message length | 2,000 chars | An oversized single message |
+| Daily token budget | 5,000,000 tokens/day | Runaway total spend across all visitors |
+| Daily turn cap | 750 turns/day | A circuit breaker independent of token accounting |
+| Burst window | 5 turns/60s per visitor | Rapid-fire hammering from one visitor |
+| Sustained window | 40 turns/hour per visitor | A visitor running up a long session |
+| Contact-email cap | 2 emails/hour per visitor | `record_user_details` being used as an open relay to your inbox |
+
+A visitor is identified by IP address (`request.client.host` from Gradio's `gr.Request`) — imperfect on its own (shared NAT, rotating clients), which is why it's backed by the site-wide daily caps rather than relied on alone. `X-Forwarded-For` is only trusted behind a proxy you control (`CHAT_TRUST_PROXY_HEADER=true`); left off by default, since a client exposed directly to the internet could otherwise forge that header to mint itself a fresh quota.
+
+A rejected turn gets one of two short in-character replies — "that's a bit long" for an oversized message, or "I've hit my limit for now" for everything else — never a raw error.
+
+All the numbers above are tunable via environment variables (see [Configuration](#configuration)) and every counter resets automatically: the per-visitor windows slide continuously, and the daily budgets roll over at local midnight (`Asia/Kolkata`). State lives in memory and is *not* persisted — that's intentional for a rate limiter, but it also means the limits apply per worker process; running more than one process (e.g. behind a load balancer) would need the counters moved to something shared, like Redis.
+
 ## Known limitations
 
 - Tools always report `{"recorded": "ok"}` to the model even when the underlying send/store failed; `handle_tool_calls()` catches the exception one layer up but reports it as plain text, not the SDK's `is_error` field — so the model can still tell a visitor "I've noted that down" after a failed send. Tracked by two `xfail(strict=True)` tests (see [Testing](#testing)).
 - `services/digest.py`'s module docstring still describes an older SMTP-based implementation, even though it sends through `MailUtility` (Gmail API/OAuth).
 - The persona name and background-file filenames are hardcoded in `services/profile.py`.
 - Evaluation runs (as of the last recorded deterministic run, on an earlier version of the system prompt and dataset) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reached the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run, and the judged layer (added since) has not yet had a first real run at all.
+- Rate-limit state is in-process only, so limits apply per worker and are lost on restart — see [Rate limiting](#rate-limiting).
 - No `LICENSE` file.
 
-`SPEC.md` section 11 tracks these in full, with file/line references and, where one exists, the test that pins each one.
+`SPEC.md` section 12 tracks these in full, with file/line references and, where one exists, the test that pins each one.
 
 ## Further documentation
 

@@ -8,8 +8,10 @@ from dotenv import load_dotenv
 from langfuse import get_client, observe
 from openinference.instrumentation.anthropic import AnthropicInstrumentor
 
+from services import rate_limit
 from services.digest import start_scheduler
-from services.profile import get_system_prompt_for_profile, FALLBACK_BUSY, FALLBACK_GENERIC
+from services.profile import get_system_prompt_for_profile, FALLBACK_BUSY, FALLBACK_GENERIC, FALLBACK_TOO_LONG, \
+    FALLBACK_RATE_LIMITED
 from services.tools import record_user_details, record_unknown_question, tools
 
 load_dotenv(override=True)
@@ -59,12 +61,23 @@ def handle_tool_calls(tool_use_blocks):
 
 
 @observe(name="chat_turn")
-def chat(message, history):
+def chat(message, history, request: gr.Request | None = None):
+    caller = rate_limit.caller_key(request)
+    try:
+        rate_limit.check_chat_turn(caller, message)
+    except rate_limit.MessageTooLong:
+        return FALLBACK_TOO_LONG
+    except rate_limit.RateLimited as exc:
+        logger.info("Turn refused for %s: %s", caller, exc.reason)
+        return FALLBACK_RATE_LIMITED
+
+    token = rate_limit.set_current_caller(caller)
+
     try:
         return _chat(message, history)
     except (anthropic.RateLimitError,
-            anthropic.InternalServerError,
-            anthropic.APIConnectionError) as exc:
+                anthropic.InternalServerError,
+                anthropic.APIConnectionError) as exc:
         logger.warning("Transient Anthropic error", exc_info=exc)
         return FALLBACK_BUSY
     except anthropic.APIError as exc:
@@ -75,6 +88,8 @@ def chat(message, history):
         # Tool failures, PDF read failures, anything else (§11 item 5)
         logger.exception("Unhandled error in chat turn")
         return FALLBACK_GENERIC
+    finally:
+        rate_limit.reset_current_caller(token)
 
 
 @observe(name="chat_turn")
@@ -103,6 +118,7 @@ def _chat(message, history):
             messages=messages,
             tools=tools,
         )
+        rate_limit.record_usage(response.usage)
 
         # If the LLM wants to call a tool, we do that and loop again!
         if response.stop_reason == "tool_use":

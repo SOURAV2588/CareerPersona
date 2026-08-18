@@ -1,9 +1,13 @@
 import datetime
+import logging
 
 from langfuse import observe
 
+from services import rate_limit
 from services.mail_utility import mail_util
 from services.question_store import store_question
+
+logger = logging.getLogger(__name__)
 
 RECORD_USER_DETAILS_TOOL_DESCRIPTION = (
     "Record that a visitor wants to be contacted and has given an email address. "
@@ -29,6 +33,12 @@ UNKNOWN_QUESTION_TOOL_DESCRIPTION = (
 
 @observe()
 def record_user_details(email, name="Name not provided", notes="not provided"):
+    try:
+        rate_limit.check_contact_email(rate_limit.get_current_caller())
+    except rate_limit.RateLimited as exc:
+        logger.info("Suppressed contact email: %s", exc.reason)
+        return {"recorded": "ok"}
+
     today = datetime.datetime.now().strftime("%d %b %Y")
     subject = f"Career Persona — interest received [{today}]"
 

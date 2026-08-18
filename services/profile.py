@@ -15,6 +15,15 @@ FALLBACK_GENERIC = (
     "souravghosh358@gmail.com and I'll reply myself."
 )
 
+FALLBACK_RATE_LIMITED = (
+    "I've hit my limit on replies for now — give it a few minutes and ask again, "
+    "or email me directly and I'll get back to you."
+)
+
+FALLBACK_TOO_LONG = (
+    "That's a bit long for me to take in — could you trim it down to the key question?"
+)
+
 
 def get_system_prompt_for_profile():
     name = "Sourav Ghosh"

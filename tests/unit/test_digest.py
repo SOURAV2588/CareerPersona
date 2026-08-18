@@ -58,24 +58,23 @@ class TestBuildMessageSubjectAndBody:
 
 
 class TestSendDailyDigest:
-    def test_noop_when_no_pending_questions(self, monkeypatch, capsys):
-        monkeypatch.setattr(digest, "read_pending", MagicMock(return_value=[]))
+    def test_noop_when_no_pending_questions(self, monkeypatch):
+        monkeypatch.setattr(digest, "fetch_pending", MagicMock(return_value=[]))
         fake_mail_util = MagicMock()
         monkeypatch.setattr(digest, "mail_util", fake_mail_util)
-        clear_pending = MagicMock()
-        monkeypatch.setattr(digest, "clear_pending", clear_pending)
+        mark_sent = MagicMock()
+        monkeypatch.setattr(digest, "mark_sent", mark_sent)
 
         digest.send_daily_digest()
 
         fake_mail_util.send_email.assert_not_called()
-        clear_pending.assert_not_called()
-        assert "skipping digest" in capsys.readouterr().out
+        mark_sent.assert_not_called()
 
     def test_sends_email_and_archives_on_success(self, monkeypatch):
-        entries = [{"question": "Q1", "timestamp": "t1"}]
-        monkeypatch.setattr(digest, "read_pending", MagicMock(return_value=entries))
-        clear_pending = MagicMock()
-        monkeypatch.setattr(digest, "clear_pending", clear_pending)
+        entries = [{"id": 1, "question": "Q1", "timestamp": "t1"}]
+        monkeypatch.setattr(digest, "fetch_pending", MagicMock(return_value=entries))
+        mark_sent = MagicMock()
+        monkeypatch.setattr(digest, "mark_sent", mark_sent)
 
         fake_mail_util = MagicMock()
         monkeypatch.setattr(digest, "mail_util", fake_mail_util)
@@ -83,25 +82,25 @@ class TestSendDailyDigest:
         digest.send_daily_digest()
 
         fake_mail_util.send_email.assert_called_once()
-        kwargs = fake_mail_util.send_email.call_args.kwargs
-        assert "1 unanswered question(s)" in kwargs["subject"]
-        assert "Q1" in kwargs["body"]
-        clear_pending.assert_called_once_with(entries)
+        subject, body = fake_mail_util.send_email.call_args.args
+        assert "1 unanswered question(s)" in subject
+        assert "Q1" in body
+        mark_sent.assert_called_once_with([1])
 
-    def test_leaves_pending_entries_when_send_fails(self, monkeypatch, capsys):
-        entries = [{"question": "Q1", "timestamp": "t1"}]
-        monkeypatch.setattr(digest, "read_pending", MagicMock(return_value=entries))
-        clear_pending = MagicMock()
-        monkeypatch.setattr(digest, "clear_pending", clear_pending)
+    def test_send_failure_propagates_and_leaves_pending_unmarked(self, monkeypatch):
+        entries = [{"id": 1, "question": "Q1", "timestamp": "t1"}]
+        monkeypatch.setattr(digest, "fetch_pending", MagicMock(return_value=entries))
+        mark_sent = MagicMock()
+        monkeypatch.setattr(digest, "mark_sent", mark_sent)
 
         fake_mail_util = MagicMock()
         fake_mail_util.send_email.side_effect = RuntimeError("SMTP down")
         monkeypatch.setattr(digest, "mail_util", fake_mail_util)
 
-        digest.send_daily_digest()
+        with pytest.raises(RuntimeError, match="SMTP down"):
+            digest.send_daily_digest()
 
-        clear_pending.assert_not_called()
-        assert "Failed to send digest email" in capsys.readouterr().out
+        mark_sent.assert_not_called()
 
 
 class TestStartScheduler:

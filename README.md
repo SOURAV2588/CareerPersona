@@ -78,33 +78,33 @@ Out-of-scope questions (not about Sourav's professional life at all) are decline
 | Scheduling | APScheduler cron trigger |
 | Storage | JSON Lines files (no database) |
 | Tracing | Langfuse with OpenInference auto-instrumentation |
-| Testing | pytest, with a separate live evaluation suite |
+| Testing | pytest, with a separate two-tier live evaluation suite (deterministic + LLM-judged) |
 
 ## Project structure
 
 ```
 career-persona/
-├── app.py                                Entry point: chat loop, error handling, tool dispatch, Gradio launch
+├── app.py                                     Entry point: chat loop, error handling, tool dispatch, Gradio launch
 ├── services/
-│   ├── profile.py                        Builds the system prompt from background files; fallback message strings
-│   ├── tools.py                          The two model-callable tools and their schemas
-│   ├── mail_utility.py                   Gmail API client wrapper
-│   ├── question_store.py                 Read/write/archive unanswered questions
-│   ├── digest.py                         Daily digest email and its scheduler
-│   └── langfuse_test.py                  Standalone Langfuse connectivity check
+│   ├── profile.py                             Builds the system prompt from background files; fallback message strings
+│   ├── tools.py                                The two model-callable tools and their schemas
+│   ├── mail_utility.py                         Gmail API client wrapper
+│   ├── question_store.py                       Read/write/archive unanswered questions
+│   ├── digest.py                               Daily digest email and its scheduler
+│   └── langfuse_test.py                        Standalone Langfuse connectivity check
 ├── resources/
-│   ├── summary.txt                       Short bio
-│   ├── Sourav-Ghosh-Career-Profile.md    Detailed, structured career profile
-│   ├── current_status_and_preferences.md Notice period, relocation, role type, redirect policy
-│   └── SOURAV_GHOSH_LINKEDIN.pdf         LinkedIn export (currently not read into the live prompt — see Known limitations)
+│   ├── summary.txt                             Short bio
+│   ├── SOURAV_GHOSH_CAREER_PROFILE.md          Detailed, structured career profile
+│   ├── CURRENT_STATUS_AND_PREFERENCES.md       Notice period, relocation, role type, redirect policy
+│   └── SOURAV_GHOSH_LINKEDIN.pdf               LinkedIn export, text extracted into the prompt at runtime
 ├── tests/
-│   ├── conftest.py                       Session-wide test isolation
-│   ├── unit/                             Fast, fully mocked tests
-│   └── evals/                            Behavioral evaluations against the real model
-├── data/                                 Created at runtime, git-ignored
-├── requirements.txt                      Runtime dependencies
-├── requirements-dev.txt                  Runtime plus test dependencies
-└── pytest.ini                            Test configuration
+│   ├── conftest.py                             Session-wide test isolation
+│   ├── unit/                                   Fast, fully mocked tests
+│   └── evals/                                  Behavioral evaluations against the real model (deterministic + LLM-judged)
+├── data/                                       Created at runtime, git-ignored
+├── requirements.txt                            Runtime dependencies
+├── requirements-dev.txt                        Runtime plus test dependencies
+└── pytest.ini                                  Test configuration
 ```
 
 ## Getting started
@@ -136,13 +136,14 @@ pip install -r requirements-dev.txt
 
 ### Add your own content
 
-The persona is driven by files in `resources/`:
+The persona is driven by four files in `resources/`, all read fresh on every chat turn:
 
 - `summary.txt` — a short free-text bio.
-- `Sourav-Ghosh-Career-Profile.md` — a longer, structured career profile (roles, skills, domain experience).
-- `current_status_and_preferences.md` — notice period, relocation, and the policy for redirecting compensation/reasons-for-leaving questions to email instead of answering them.
+- `SOURAV_GHOSH_CAREER_PROFILE.md` — a longer, structured career profile (roles, skills, domain experience).
+- `CURRENT_STATUS_AND_PREFERENCES.md` — notice period, relocation, and the policy for redirecting compensation/reasons-for-leaving questions to email instead of answering them.
+- `SOURAV_GHOSH_LINKEDIN.pdf` — a LinkedIn profile export; text is extracted from it page by page at runtime.
 
-Replace all three with your own. `SOURAV_GHOSH_LINKEDIN.pdf` is also present and its text-extraction helper (`get_linkedin_details()` in `services/profile.py`) is still there, but the line that adds its output to the live system prompt is currently commented out — the LinkedIn export is not part of what the model sees today. If you rename the career-profile or preferences files, update the filenames in `services/profile.py`. The persona name is currently hardcoded in the same file.
+Replace all four with your own. If you rename any of them, update the filename in the matching `get_*()` function in `services/profile.py`. The persona name is currently hardcoded in the same file.
 
 ### Set up Gmail credentials
 
@@ -178,10 +179,12 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 | `GMAIL_CLIENT_ID` | For email | OAuth client ID |
 | `GMAIL_CLIENT_SECRET` | For email | OAuth client secret |
 | `GMAIL_REFRESH_TOKEN` | For email | Long-lived token used to mint access tokens |
-| `GMAIL_RECIPIENT` | For email | Where notifications and digests are sent — not validated at startup; if unset, sends fail with an unhelpful error (see [Known limitations](#known-limitations)) |
+| `GMAIL_RECIPIENT` | For email | Where notifications and digests are sent — raises a clear error at send time if unset |
 | `LANGFUSE_PUBLIC_KEY` | For tracing | Langfuse project key |
 | `LANGFUSE_SECRET_KEY` | For tracing | Langfuse project secret |
 | `LANGFUSE_BASE_URL` | For tracing | Langfuse endpoint |
+| `EVAL_JUDGE_MODEL` | For judged tests only | Judge model for the LLM-judged eval layer (default `claude-sonnet-5`) |
+| `EVAL_JUDGE_SAMPLES` | For judged tests only | Judge calls per case, majority vote (default `1`) |
 
 ## Running the app
 
@@ -214,13 +217,19 @@ python -m services.langfuse_test
 The suite has two layers with different costs, separated by pytest markers.
 
 ```bash
-pytest              # unit tests only: fast, free, no network
-pytest -m live      # adds the evaluation suite: calls the real model, costs tokens
+pytest                              # unit tests only: fast, free, no network
+pytest -m live                      # adds both eval layers: calls the real model(s), costs tokens
+pytest -m "live and not judged"     # deterministic only (one model)
+pytest -m judged                    # judged only (LLM-judged, two models per case)
 ```
 
 **Unit tests** (`tests/unit/`) cover every module. All external services are mocked. `tests/conftest.py` seeds dummy credentials and stubs the Gmail client for the whole session, so the unit layer cannot make a network call even when a real `.env` file is present.
 
-**Evaluations** (`tests/evals/`) call the real model through `app.chat()` and check its behavior against a YAML dataset: whether the right tool fired, whether arguments came through intact, and whether the reply avoided forbidden claims. Email is still stubbed here, so evaluation runs cannot send real mail. See `tests/evals/README.md` for details.
+**Evaluations** (`tests/evals/`) call the real model through `app.chat()`.
+- **Deterministic** checks behavior deterministically: whether the right tool fired, whether arguments came through intact, and whether the reply avoided forbidden claims.
+- **Judged** hands the transcript to a separate, stronger judge model that grades it against a free-text `criteria` field — for qualitative checks (persona consistency, tone, faithfulness to the background material) that a substring match can't capture. A handful of hand-labeled calibration cases run alongside it to catch a miscalibrated judge before trusting its verdicts.
+
+Email is stubbed in both layers, so evaluation runs cannot send real mail. See `tests/evals/README.md` for details.
 
 Coverage report:
 
@@ -228,14 +237,11 @@ Coverage report:
 pytest --cov=app --cov=services --cov-report=term-missing
 ```
 
-### About the failing tests
+### About the test results
 
-A plain `pytest` run currently reports `2 failed, 45 passed, 32 deselected, 2 xfailed`, and that is *partly* intentional:
+A plain `pytest` run currently reports `48 passed, 47 deselected, 2 xfailed` — nothing unexpectedly red. The 2 `xfail(strict=True)` results (`tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) are a deliberately accepted, tracked gap: tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run would break again if this were ever fixed without removing the marker, so a fix can't silently go unnoticed.
 
-- **2 accepted, tracked failures** (`xfail(strict=True)` in `tests/unit/test_app_tool_dispatch.py::TestKnownBugs`) — tool failures are caught so the chat turn doesn't crash, but they're still reported to the model as plain `{"error": ...}` text rather than via the Anthropic SDK's `is_error` tool-result field. `strict=True` means the run breaks again if this is ever fixed without removing the marker, so a fix can't silently go unnoticed.
-- **2 unmarked, genuine failures** (`tests/unit/test_profile.py`) — these are real test/code drift, not an accepted bug: the tests assert the LinkedIn PDF's text appears in the system prompt, but that line is currently commented out in `services/profile.py` in favor of the newer career-profile and preferences files. This needs a decision (update the tests, or restore the LinkedIn line) rather than being treated as known-and-fine.
-
-Treating the test output as a live, up-to-date bug list is deliberate — see `SPEC.md` §11 and §14 for the full breakdown, including two now-fixed bugs (unhandled Anthropic API errors, uncaught tool exceptions) whose test docstrings haven't caught up with the fix yet.
+Treating the test output as a live, up-to-date bug list is deliberate — see `SPEC.md` §11 and §14 for the full breakdown, including a couple of now-fixed bugs whose test docstrings haven't caught up with the fix yet (harmless, just misleading if read on their own).
 
 ## Design notes
 
@@ -247,20 +253,20 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 
 **Unanswered questions are batched, not pushed.** An immediate email for every unanswered question would be noise. Batching them into one daily digest makes the list readable, and the questions survive restarts because they are written to disk rather than held in memory.
 
-**Files instead of a database.** Two JSON Lines files handle all persistence. For the volume this application sees, a database would add operational overhead without solving a real problem.
+**Files instead of a database.** JSON Lines files handle all persistence. For the volume this application sees, a database would add operational overhead without solving a real problem.
 
 **One email path.** Immediate notifications and the daily digest both go through the same `MailUtility` class. An earlier version used two different mechanisms for the same job.
 
 **Prompt-injection guardrails.** Visitor text is always treated as a question, never as an instruction that changes the system prompt's rules. Both the system prompt and the `record_user_details` tool description explicitly warn against copying visitor-dictated wording (e.g. a "note" telling the model what to say about them) into a tool call or a reply.
 
+**Two eval layers instead of one.** Deterministic assertions are cheap and catch clear-cut regressions (wrong tool, wrong argument, a banned phrase) but can't judge tone or nuance. An LLM judge can, but is itself fallible, so it's checked against hand-labeled calibration cases before its verdicts on real cases are trusted.
+
 ## Known limitations
 
-- `GMAIL_RECIPIENT` is not validated. If it is unset, the failure appears as an obscure error from the email encoding layer rather than a clear message — caught by `chat()`'s fallback handling in the live app, but still an opaque cause in the logs and in the daily digest job.
-- `services/profile.py`'s `get_current_preferences()` reads its file with a path relative to the process's working directory, unlike the other resource-reading functions in the same module, which resolve an absolute path from `__file__`. Running the app from a directory other than the repo root will break this one specifically.
 - Tools always report `{"recorded": "ok"}` to the model even when the underlying send/store failed; `handle_tool_calls()` catches the exception one layer up but reports it as plain text, not the SDK's `is_error` field — so the model can still tell a visitor "I've noted that down" after a failed send. Tracked by two `xfail(strict=True)` tests (see [Testing](#testing)).
-- Two `tests/unit/test_profile.py` tests currently fail (not `xfail`-marked) because the system prompt no longer includes LinkedIn PDF text but the tests still expect it — real, unresolved test/code drift.
+- `services/digest.py` rebuilds a `MailUtility` (full OAuth setup) on every scheduled run instead of reusing one instance, and its module docstring still describes an older SMTP-based implementation.
 - The persona name and background-file filenames are hardcoded in `services/profile.py`.
-- Evaluation runs (as of the last recorded run, before the current prompt was written) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reach the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run.
+- Evaluation runs (as of the last recorded deterministic run, on an earlier version of the system prompt and dataset) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reached the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run, and the judged layer (added since) has not yet had a first real run at all.
 - No `LICENSE` file.
 
 `SPEC.md` section 11 tracks these in full, with file/line references and, where one exists, the test that pins each one.

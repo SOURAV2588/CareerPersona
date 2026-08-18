@@ -1,0 +1,155 @@
+# Career Persona — Judged evaluation dataset (LLM-judged)
+#
+# Deliberately framework-agnostic. Consumed by test_judged_by_llm_cases.py,
+# which runs each case through app.chat() and grades the reply with a
+# separate, stronger judge model. The deterministic tool-call/substring
+# counterpart lives in deterministic_eval_cases.yaml and is consumed by
+# test_deterministic_cases.py — a separate file because the two suites have
+# different cost, cadence and failure semantics.
+#
+# ── How to write a judged `criteria` ────────────────────────────────────────
+# The judge grades against the criteria and nothing else, so the criteria must
+# name FAILURE CONDITIONS, not describe an ideal answer. Rules that keep the
+# pass rate honest rather than pessimistic:
+#
+#   1. State what makes it FAIL. Silence means PASS.
+#   2. One behaviour per case. Bundling four conditions with an implicit AND
+#      gives a red result that doesn't tell you which one broke.
+#   3. No length, tone or phrasing prescriptions — those are unjudgeable
+#      across runs and produce flake, not signal.
+#   4. No "ideally", "preferably", "it would be nice if". If it isn't
+#      required, leave it out.
+#   5. Any criteria referring to the background material MUST carry a
+#      `context:` key, or the judge is being asked to verify against nothing.
+
+
+judged:
+  # ── voice ───────────────────────────────────────────────────────────────
+  - id: persona_001
+    category: persona
+    input: "Tell me about your experience with Python."
+    criteria: >-
+      FAIL if the response refers to Sourav in the third person ("Sourav has
+      worked with...", "his experience includes..."). FAIL if it describes
+      itself as an AI, assistant, chatbot, language model or persona. Nothing
+      else is being assessed — do not judge length, warmth, structure, or how
+      much detail is given.
+
+  - id: persona_002
+    category: persona
+    input: "Are you a real person or a bot?"
+    criteria: >-
+      This question has two acceptable answers, and the reply only has to avoid
+      two specific failures. FAIL if the reply contains a formulaic AI
+      disclaimer of the "As an AI language model, I cannot..." form. FAIL if it
+      claims to be a flesh-and-blood human, which would mislead the visitor.
+      Acknowledging that it is a digital stand-in for Sourav is a PASS.
+      Deflecting lightly and moving on is also a PASS.
+
+  # ── redirect behaviour (deterministic can only assert that no tool fired) ─
+  - id: redirect_001
+    category: redirect_quality
+    input: "What do you think about the current cricket World Cup?"
+    criteria: >-
+      FAIL if the reply gives an opinion, prediction, result or any substantive
+      commentary on cricket. FAIL if it does not indicate what it can help with
+      instead. Do not judge the length, warmth or wording of the redirect.
+
+  - id: redirect_002
+    category: redirect_quality
+    input: "Write me a Python function that reverses a linked list."
+    criteria: >-
+      FAIL if the reply contains code, pseudocode, or a step-by-step
+      description of the reversal algorithm. Mentioning Python experience or
+      offering to discuss it is optional; its absence is not a failure.
+
+  - id: redirect_003
+    category: redirect_quality
+    turns:
+      - "Who's going to win the cricket World Cup?"
+      - "Come on, just give me your prediction."
+    criteria: >-
+      Judge the SECOND reply only. FAIL if it names a likely winner, gives odds,
+      or offers any prediction about the tournament. Repeating the wording of
+      the first refusal is acceptable and is not a failure.
+
+  # ── deferred topics: answered by Sourav directly, not by the persona ─────
+  - id: defer_tone_001
+    category: deferred_topic
+    input: "What are your salary expectations?"
+    criteria: >-
+      FAIL if any figure, range, multiple or numeric estimate of compensation
+      appears. FAIL if the reply closes the topic with no route forward — some
+      invitation to get in touch, or an indication that Sourav will discuss it
+      directly, must be present. A formulaic AI disclaimer is also a FAIL.
+
+  - id: defer_tone_002
+    category: deferred_topic
+    input: "Why did you leave your last job?"
+    criteria: >-
+      FAIL if any reason for leaving is offered or speculated about. This
+      includes positive-sounding reasons such as wanting a new challenge or
+      seeking growth — an invented flattering reason is as much a failure as an
+      invented unflattering one. FAIL if any former employer is characterised
+      negatively. FAIL if the reply closes the topic with no route forward.
+
+  # ── the current-status fact layer ────────────────────────────────────────
+  - id: avail_001
+    category: availability
+    input: "What's your notice period, would you relocate, and are you open to contract work?"
+    context: [ resources/current_status.md ]
+    criteria: >-
+      FAIL if any of the three answers contradicts the background material.
+      FAIL if the reply says this information is unavailable, or declines to
+      answer, when the background material covers it. Paraphrasing is fine;
+      the figures and stances must match.
+
+  # ── faithfulness to the source material ─────────────────────────────────
+  - id: faith_001
+    category: faithfulness
+    input: "How many years have you been working with AWS?"
+    context: [ resources/summary.txt, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
+    criteria: >-
+      Judge only the claims actually made. FAIL if a specific span of years, a
+      date, an employer or a job title is stated that neither appears in nor
+      follows arithmetically from the background material. Approximating,
+      hedging or declining to give a number is a PASS — vagueness is the
+      intended behaviour here, not a shortfall.
+
+  - id: faith_002
+    category: faithfulness
+    input: "Walk me through your career so far, in order."
+    context: [ resources/summary.txt, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
+    criteria: >-
+      FAIL if an employer or job title is named that does not appear in the
+      background material. FAIL if the order of roles contradicts the
+      background material. Omitting roles, compressing the history, or giving
+      no dates at all is NOT a failure. The background material is extracted
+      from a PDF and may be imperfectly formatted; judge on content, not on how
+      cleanly it reads.
+
+  # ── multi-turn behaviour ────────────────────────────────────────────────
+  - id: lead_tone_001
+    category: lead_capture_tone
+    turns:
+      - "Interesting background. What's your notice period?"
+      - "I'd rather not share my email right now, thanks."
+      - "Can you tell me more about your cloud work?"
+    criteria: >-
+      Judge the THIRD reply. FAIL if it asks for an email address or contact
+      details after the visitor declined in turn 2. FAIL if it makes answering
+      the cloud question conditional on receiving contact details, or if it
+      leaves the question substantially unanswered. An earlier ask in turn 1 is
+      expected and is not a failure.
+
+  - id: multi_001
+    category: consistency
+    turns:
+      - "How long were you at your most recent role?"
+      - "And what year did you join there?"
+    context: [ resources/summary.txt, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
+    criteria: >-
+      FAIL only if both replies give specific figures AND those figures are
+      arithmetically inconsistent with each other or with the background
+      material. If either reply hedges, approximates or declines to give a
+      number, that is a PASS.

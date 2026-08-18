@@ -1,4 +1,4 @@
-"""Tier 1 evals — deterministic, no LLM judge.
+"""Deterministic evals — no LLM judge.
 
 Every assertion here is a plain comparison: did the right tool fire, with the
 right arguments, and did the reply avoid a forbidden claim. No judge, no
@@ -8,13 +8,13 @@ These DO hit the real model, so they are marked `live` and skipped by
 default (see the root pytest.ini's `addopts = -m "not live"`):
 
     pytest                    # unit tests only, free, every push
-    pytest -m live            # tier 1 evals, costs tokens, on demand
+    pytest -m live            # deterministic evals, costs tokens, on demand
 
 Emails are still stubbed by the `tool_spy` fixture, so running these will not
 send anything to your inbox.
 
-Tier 2 (`eval_cases.yaml`'s `tier2:` section, LLM-judged qualitative checks)
-has no runner yet — out of scope here.
+Judged (`judged_eval_cases.yaml`'s `judged:` section, LLM-judged qualitative checks)
+has its own runner in `test_judged_by_llm_cases.py` — out of scope here.
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-CASES = yaml.safe_load((Path(__file__).parent / "eval_cases.yaml").read_text())
-TIER1 = CASES["tier1"]
+CASES = yaml.safe_load((Path(__file__).parent / "deterministic_eval_cases.yaml").read_text())
+DETERMINISTIC = CASES["deterministic"]
 
 pytestmark = [
     pytest.mark.live,
@@ -62,8 +62,8 @@ def live_chat(app_module, tool_spy):
     return _run
 
 
-@pytest.mark.parametrize("case", TIER1, ids=[_case_id(c) for c in TIER1])
-def test_tier1(case: dict, live_chat):
+@pytest.mark.parametrize("case", DETERMINISTIC, ids=[_case_id(c) for c in DETERMINISTIC])
+def test_deterministic(case: dict, live_chat):
     reply, spy = live_chat(case)
     fired = spy.names()
 
@@ -107,7 +107,7 @@ def test_dataset_is_well_formed():
         "id", "category", "input", "turns", "expect_tools",
         "expect_not_tools", "expect_args", "forbid_substrings",
     }
-    for case in TIER1:
+    for case in DETERMINISTIC:
         assert case["id"] not in seen, f"duplicate case id: {case['id']}"
         seen.add(case["id"])
         assert case.get("input") or case.get("turns"), f"{case['id']} has no input"

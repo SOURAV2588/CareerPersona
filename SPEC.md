@@ -4,7 +4,7 @@ Technical specification for the "Career Persona" project. This document reflects
 the codebase as of 2026-08-18 (post error-handling, richer-persona-prompt,
 resource-file rename, judged eval suite, inbound rate-limiting/spend-cap, and
 the Postgres-backed question-store migration — write and read sides now
-reconnected, see §2, §9).
+reconnected, see §2, §9 — plus MIT licensing, see §16).
 
 ## 1. Purpose
 
@@ -531,9 +531,6 @@ Ordered roughly by how likely each is to bite in practice.
    a flaky judge call fails the eval run rather than degrading gracefully —
    but worth aligning if judged runs start showing transient-error noise.
 
-6. **No `LICENSE` file.** Not a functional bug, but worth flagging if the
-   project is ever meant to be shared or reused publicly.
-
 Fixed since the last pass:
 - **The daily digest's producer and consumer now use the same store.**
   `record_unknown_question` (`services/tools.py`) was switched from
@@ -755,3 +752,25 @@ never accumulates state across tests or trips the burst/sustained limiters,
 regardless of dataset size. Only a single test that itself makes more than
 `CHAT_BURST_MAX_TURNS` (default 5) `app.chat()` calls in quick succession
 would need to be aware of the limiter.
+
+## 16. Licensing
+
+The repository is split into two licensing zones, because the code and the
+personal content it ships with have different reuse intentions.
+
+| Scope | Terms |
+|---|---|
+| Source code — `app.py`, `services/`, `tests/`, config files, documentation | MIT License (`LICENSE` at repo root) |
+| `resources/` — `summary.txt`, `SOURAV_GHOSH_CAREER_PROFILE.md`, `CURRENT_STATUS_AND_PREFERENCES.md`, `SOURAV_GHOSH_LINKEDIN.pdf` | © 2026 Sourav Ghosh, all rights reserved. Not licensed for reuse. |
+| Runtime data — `data/` (gitignored), the `unknown_questions` Postgres table (§9, §11) | Not licensed; may contain visitor-submitted contact details |
+
+The `LICENSE` file deliberately contains the canonical, unmodified MIT text
+and nothing else, so GitHub's license detection (`licensee`) matches it
+cleanly — appended preamble or carve-out text is a common cause of a repo
+being reported as "Other". The `resources/` carve-out therefore lives in
+`README.md`'s License section rather than in `LICENSE` itself.
+
+All third-party runtime dependencies (§13) are MIT, BSD or Apache-2.0. None
+carry copyleft obligations, so MIT on this project's own code creates no
+conflict. Worth re-checking with `pip-licenses` if the pinned versions in
+`requirements.txt` are ever bumped.

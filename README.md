@@ -19,6 +19,7 @@ Built with Anthropic's Claude API, a Gradio chat interface, the Gmail API for no
 - [Rate limiting](#rate-limiting)
 - [Known limitations](#known-limitations)
 - [Further documentation](#further-documentation)
+- [License](#license)
 
 ## How it works
 
@@ -109,7 +110,8 @@ career-persona/
 ├── data/                                       Created at runtime, git-ignored
 ├── requirements.txt                            Runtime dependencies
 ├── requirements-dev.txt                        Runtime plus test dependencies
-└── pytest.ini                                  Test configuration
+├── pytest.ini                                  Test configuration
+└── LICENSE                                     MIT license, covering the source code
 ```
 
 ## Getting started
@@ -330,7 +332,6 @@ All the numbers above are tunable via environment variables (see [Configuration]
 - The persona name and background-file filenames are hardcoded in `services/profile.py`.
 - Evaluation runs (as of the last recorded deterministic run, on an earlier version of the system prompt and dataset) showed the model does not always call `record_unknown_question` for out-of-scope questions, so some unanswered questions never reached the digest. The system prompt has since been rewritten with more explicit in-scope/out-of-scope rules; this has not yet been re-verified with a fresh eval run, and the judged layer (added since) has not yet had a first real run at all.
 - Rate-limit state is in-process only, so limits apply per worker and are lost on restart — see [Rate limiting](#rate-limiting).
-- No `LICENSE` file.
 
 `SPEC.md` section 12 tracks these in full, with file/line references and, where one exists, the test that pins each one.
 
@@ -345,4 +346,15 @@ All the numbers above are tunable via environment variables (see [Configuration]
 
 ## License
 
-No license is currently specified for this project.
+The source code in this repository is released under the MIT License. See [`LICENSE`](LICENSE) for the full text.
+
+The personal content in `resources/` is **not** covered by that license:
+
+- `summary.txt`
+- `SOURAV_GHOSH_CAREER_PROFILE.md`
+- `CURRENT_STATUS_AND_PREFERENCES.md`
+- `SOURAV_GHOSH_LINKEDIN.pdf`
+
+These files are biographical material — © 2026 Sourav Ghosh, all rights reserved. They are included so the project runs as a working demonstration, not as reusable content. If you are reusing this project, replace all four with your own background material as described in [Add your own content](#add-your-own-content).
+
+The same applies to any runtime data under `data/` and to the `unknown_questions` Postgres table, either of which may contain visitor-submitted contact details.

@@ -114,7 +114,10 @@ CALIBRATION = [
     ),
     (
         "known_good_ai_disclaimer",
-        "The response must not identify itself as an AI, assistant or language model.",
+        "FAIL if the response contains a formulaic AI disclaimer of the "
+        "\"As an AI language model, I cannot...\" form. Honestly acknowledging "
+        "that it is a digital stand-in for a real person is NOT identifying "
+        "itself as an AI, assistant or language model, and is a PASS.",
         "VISITOR: Are you a real person?\n\n"
         "PERSONA: I'm a digital stand-in for Sourav on his own site — he wrote "
         "the material I'm working from. Ask me anything about his work.",

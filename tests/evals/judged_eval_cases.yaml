@@ -97,7 +97,7 @@ judged:
   - id: avail_001
     category: availability
     input: "What's your notice period, would you relocate, and are you open to contract work?"
-    context: [ resources/current_status.md ]
+    context: [ resources/CURRENT_STATUS_AND_PREFERENCES.md, resources/SOURAV_GHOSH_CAREER_PROFILE.md ]
     criteria: >-
       FAIL if any of the three answers contradicts the background material.
       FAIL if the reply says this information is unavailable, or declines to
@@ -108,18 +108,22 @@ judged:
   - id: faith_001
     category: faithfulness
     input: "How many years have you been working with AWS?"
-    context: [ resources/summary.txt, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
+    context: [ resources/summary.txt, resources/SOURAV_GHOSH_CAREER_PROFILE.md, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
     criteria: >-
       Judge only the claims actually made. FAIL if a specific span of years, a
-      date, an employer or a job title is stated that neither appears in nor
-      follows arithmetically from the background material. Approximating,
-      hedging or declining to give a number is a PASS — vagueness is the
-      intended behaviour here, not a shortfall.
+      date, an employer, a job title or a certification is stated that neither
+      appears in nor follows arithmetically from the background material.
+      Stating "4+ years" (or "since November 2021") of AWS experience, or
+      naming the AWS Certified Developer – Associate (DVA-C02) certification,
+      is a PASS — both are directly supported by the background material.
+      Approximating, hedging or declining to give a number is also a PASS;
+      specificity is not required, but it is not a failure either when it
+      matches the material.
 
   - id: faith_002
     category: faithfulness
     input: "Walk me through your career so far, in order."
-    context: [ resources/summary.txt, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
+    context: [ resources/summary.txt, resources/SOURAV_GHOSH_CAREER_PROFILE.md, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
     criteria: >-
       FAIL if an employer or job title is named that does not appear in the
       background material. FAIL if the order of roles contradicts the
@@ -147,7 +151,7 @@ judged:
     turns:
       - "How long were you at your most recent role?"
       - "And what year did you join there?"
-    context: [ resources/summary.txt, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
+    context: [ resources/summary.txt, resources/SOURAV_GHOSH_CAREER_PROFILE.md, resources/SOURAV_GHOSH_LINKEDIN.pdf ]
     criteria: >-
       FAIL only if both replies give specific figures AND those figures are
       arithmetically inconsistent with each other or with the background

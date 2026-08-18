@@ -10,12 +10,14 @@ pytestmark = pytest.mark.unit
 
 
 def test_get_summary_reads_resources_summary_txt():
+    """get_summary() reads the real summary.txt and returns non-empty content mentioning the persona."""
     content = profile.get_summary()
     assert "Sourav Ghosh" in content
     assert content.strip() != ""
 
 
 def test_get_linkedin_details_concatenates_page_text(monkeypatch):
+    """Extracted text from each PDF page is concatenated in page order."""
     page1 = MagicMock()
     page1.extract_text.return_value = "Page one text. "
     page2 = MagicMock()
@@ -31,6 +33,7 @@ def test_get_linkedin_details_concatenates_page_text(monkeypatch):
 
 
 def test_get_linkedin_details_skips_pages_with_no_extractable_text(monkeypatch):
+    """A page whose extract_text() returns None contributes nothing to the result."""
     empty_page = MagicMock()
     empty_page.extract_text.return_value = None
     text_page = MagicMock()
@@ -46,6 +49,7 @@ def test_get_linkedin_details_skips_pages_with_no_extractable_text(monkeypatch):
 
 
 def test_get_system_prompt_includes_name_summary_and_linkedin(monkeypatch):
+    """The assembled prompt includes the persona name, summary, LinkedIn text, and both tool names."""
     monkeypatch.setattr(profile, "get_summary", lambda: "SUMMARY_MARKER")
     monkeypatch.setattr(profile, "get_linkedin_details", lambda: "LINKEDIN_MARKER")
 
@@ -59,6 +63,7 @@ def test_get_system_prompt_includes_name_summary_and_linkedin(monkeypatch):
 
 
 def test_get_system_prompt_orders_summary_before_linkedin(monkeypatch):
+    """The summary section appears before the LinkedIn section in the assembled prompt."""
     monkeypatch.setattr(profile, "get_summary", lambda: "SUMMARY_MARKER")
     monkeypatch.setattr(profile, "get_linkedin_details", lambda: "LINKEDIN_MARKER")
 

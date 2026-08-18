@@ -38,6 +38,12 @@ pytestmark = [
 
 
 def _case_id(case: dict) -> str:
+    """Build a pytest test id for a case, as ``category::id``.
+
+    :param case: A single case dict from ``deterministic_eval_cases.yaml``.
+    :type case: dict
+    :rtype: str
+    """
     return f"{case['category']}::{case['id']}"
 
 
@@ -50,6 +56,15 @@ def live_chat(app_module, tool_spy):
     """
 
     def _run(case: dict) -> tuple[str, object]:
+        """Drive app.chat() through the case's turn(s) and return the final reply and spy.
+
+        :param case: A single case dict, with either an ``input`` (single
+            turn) or ``turns`` (multi-turn) key.
+        :type case: dict
+        :return: The final turn's reply text, and the ``tool_spy`` that
+            recorded every tool call made along the way.
+        :rtype: tuple[str, ToolSpy]
+        """
         turns = case.get("turns") or [case["input"]]
         history: list[dict] = []
         reply = ""
@@ -64,6 +79,12 @@ def live_chat(app_module, tool_spy):
 
 @pytest.mark.parametrize("case", DETERMINISTIC, ids=[_case_id(c) for c in DETERMINISTIC])
 def test_deterministic(case: dict, live_chat):
+    """Run one deterministic case and assert on tool calls, arguments, and forbidden reply substrings.
+
+    :param case: A single case dict from ``deterministic_eval_cases.yaml``.
+    :type case: dict
+    :param live_chat: Fixture that runs the case through the real model.
+    """
     reply, spy = live_chat(case)
     fired = spy.names()
 

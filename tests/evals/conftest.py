@@ -36,6 +36,14 @@ TOOL_NAMES = ("record_user_details", "record_unknown_question")
 
 @dataclass
 class ToolCall:
+    """One recorded invocation of a stubbed tool.
+
+    :ivar name: The tool's name.
+    :vartype name: str
+    :ivar kwargs: The keyword arguments it was called with.
+    :vartype kwargs: dict
+    """
+
     name: str
     kwargs: dict
 
@@ -48,18 +56,40 @@ class ToolSpy:
     """
 
     def __init__(self) -> None:
+        """Initialize with no recorded calls and no simulated failures."""
         self.calls: list[ToolCall] = []
         self.fail_on: set[str] = set()
 
     def names(self) -> list[str]:
+        """Names of every tool call recorded so far, in call order.
+
+        :rtype: list[str]
+        """
         return [c.name for c in self.calls]
 
     def kwargs_for(self, name: str) -> dict:
+        """Return the keyword arguments of the first recorded call to ``name``.
+
+        :param name: The tool name to look up.
+        :type name: str
+        :raises AssertionError: If ``name`` was never called.
+        :return: The kwargs of the first matching call.
+        :rtype: dict
+        """
         matches = [c.kwargs for c in self.calls if c.name == name]
         assert matches, f"{name} was never called; called: {self.names() or 'nothing'}"
         return matches[0]
 
     def _make(self, name: str) -> Callable[..., dict]:
+        """Build a recorder function that stands in for the real tool named ``name``.
+
+        :param name: The tool name this recorder replaces.
+        :type name: str
+        :return: A callable that records the call and returns
+            ``{"recorded": "ok"}``, raising ``RuntimeError`` instead if
+            ``name`` is in :attr:`fail_on`.
+        :rtype: Callable[..., dict]
+        """
         def _recorder(**kwargs) -> dict:
             self.calls.append(ToolCall(name=name, kwargs=kwargs))
             if name in self.fail_on:

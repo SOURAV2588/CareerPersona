@@ -25,7 +25,10 @@ def fresh_store_question(monkeypatch):
 
 
 class TestRecordUserDetails:
+    """record_user_details()'s email construction and defaults."""
+
     def test_sends_email_with_provided_details(self, fresh_mail_util):
+        """A notification email is sent containing the given email, name, and notes."""
         result = tools.record_user_details(
             email="visitor@example.com", name="Ada Lovelace", notes="wants to collaborate"
         )
@@ -40,6 +43,7 @@ class TestRecordUserDetails:
         assert result == {"recorded": "ok"}
 
     def test_uses_defaults_when_name_and_notes_omitted(self, fresh_mail_util):
+        """Omitted name/notes fall back to their default placeholder strings in the email body."""
         tools.record_user_details(email="visitor@example.com")
 
         _, body = fresh_mail_util.send_email.call_args.args
@@ -47,6 +51,7 @@ class TestRecordUserDetails:
         assert "not provided" in body
 
     def test_subject_contains_todays_date(self, fresh_mail_util):
+        """The notification email's subject includes today's date."""
         import datetime
 
         tools.record_user_details(email="visitor@example.com")
@@ -57,7 +62,10 @@ class TestRecordUserDetails:
 
 
 class TestRecordUnknownQuestion:
+    """record_unknown_question()'s storage behavior."""
+
     def test_stores_question_with_recording_prefix(self, fresh_store_question):
+        """The question is stored with a "Recording unknown question: " prefix."""
         result = tools.record_unknown_question("What is the meaning of life?")
 
         fresh_store_question.assert_called_once_with(
@@ -67,17 +75,22 @@ class TestRecordUnknownQuestion:
 
 
 class TestToolSchemas:
+    """The JSON schemas passed to the Anthropic ``tools`` API parameter."""
+
     def test_tools_list_contains_both_schemas(self):
+        """The tools list contains exactly the two expected tool names."""
         names = {t["name"] for t in tools.tools}
         assert names == {"record_user_details", "record_unknown_question"}
 
     def test_record_user_details_schema_requires_only_email(self):
+        """The record_user_details schema requires only "email" and forbids extra properties."""
         schema = tools.record_user_details_json["input_schema"]
         assert schema["required"] == ["email"]
         assert set(schema["properties"]) == {"email", "name", "notes"}
         assert schema["additionalProperties"] is False
 
     def test_record_unknown_question_schema_requires_question(self):
+        """The record_unknown_question schema requires only "question" and forbids extra properties."""
         schema = tools.record_unknown_question_json["input_schema"]
         assert schema["required"] == ["question"]
         assert set(schema["properties"]) == {"question"}

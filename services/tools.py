@@ -1,3 +1,12 @@
+"""The two model-callable tools and their JSON schemas.
+
+Defines ``record_user_details`` and ``record_unknown_question`` — the
+functions the model can invoke via Anthropic tool use — along with the
+``tools`` list of JSON schemas passed straight to the Anthropic ``tools``
+API parameter. ``app.py``'s ``handle_tool_calls()`` dispatches by name to
+the functions defined here.
+"""
+
 import datetime
 import logging
 
@@ -33,6 +42,25 @@ UNKNOWN_QUESTION_TOOL_DESCRIPTION = (
 
 @observe()
 def record_user_details(email, name="Name not provided", notes="not provided"):
+    """Notify Sourav by email that a visitor wants to be contacted.
+
+    Rate-limited per caller via
+    :func:`services.rate_limit.check_contact_email` — a caller past their
+    email quota gets a silent success (``{"recorded": "ok"}``) with the
+    email suppressed, logged but not surfaced to the model, so the model
+    does not retry or explain the failure to the visitor.
+
+    :param email: The visitor's email address, as given in the
+        conversation.
+    :type email: str
+    :param name: The visitor's name, if provided.
+    :type name: str
+    :param notes: Free-text context about the visitor/conversation, in the
+        model's own words.
+    :type notes: str
+    :return: ``{"recorded": "ok"}`` on success or suppression.
+    :rtype: dict
+    """
     try:
         rate_limit.check_contact_email(rate_limit.get_current_caller())
     except rate_limit.RateLimited as exc:
@@ -49,6 +77,17 @@ def record_user_details(email, name="Name not provided", notes="not provided"):
 
 @observe()
 def record_unknown_question(question):
+    """Persist a question the model could not answer from the background material.
+
+    Stores the question via
+    :func:`services.question_store_db.store_question` for later delivery
+    in the daily digest (:mod:`services.digest`).
+
+    :param question: The visitor's question, passed through as asked.
+    :type question: str
+    :return: ``{"recorded": "ok"}``.
+    :rtype: dict
+    """
     store_question(f"Recording unknown question: {question}")
     return {"recorded": "ok"}
 

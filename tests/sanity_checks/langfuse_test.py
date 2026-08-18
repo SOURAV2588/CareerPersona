@@ -1,3 +1,11 @@
+"""Manual connectivity check for Langfuse — not a pytest test module.
+
+Run directly (``python -m services.langfuse_test`` or similar) to confirm
+Langfuse credentials and connectivity work: it emits one traced generation
+and flushes it, then prints a link to the dashboard to confirm the trace
+arrived.
+"""
+
 import os
 
 from dotenv import load_dotenv
@@ -12,6 +20,10 @@ load_dotenv(override=True)
 
 
 def verify_connection():
+    """Emit one traced generation, flush it, and print confirmation.
+
+    :return: None
+    """
     test_generation()
 
     client = get_client()
@@ -22,6 +34,11 @@ def verify_connection():
 
 @observe
 def test_generation():
+    """Traced no-op generation used to exercise the Langfuse pipeline.
+
+    :return: A fixed greeting string.
+    :rtype: str
+    """
     return "Hello World from Langfuse"
 
 if __name__ == "__main__":

@@ -1,3 +1,13 @@
+"""Application entry point for the Career Persona chatbot.
+
+Wires together the Gradio chat UI, the Anthropic Messages API, Langfuse
+tracing, inbound rate limiting, and the two model-callable tools
+(``record_user_details``, ``record_unknown_question``). The module-level
+``chat()`` function is the callable passed to :class:`gradio.ChatInterface`;
+``_chat()`` implements the bounded tool-use loop that ``chat()`` wraps with
+rate limiting and API-error handling.
+"""
+
 import json
 import logging
 
@@ -37,6 +47,22 @@ logger = logging.getLogger(__name__)
 
 
 def handle_tool_calls(tool_use_blocks):
+    """Execute a batch of model-requested tool calls and format the results.
+
+    Dispatches each ``tool_use`` content block to the matching function in
+    :mod:`services.tools` by name. A tool that raises, or a name that does
+    not match a known tool, is converted into an ``{"error": ...}`` payload
+    rather than propagating, so one bad tool call cannot abort the turn.
+
+    :param tool_use_blocks: The ``tool_use`` content blocks from an
+        Anthropic ``Message`` response (``response.content`` filtered to
+        ``type == "tool_use"``).
+    :type tool_use_blocks: list[anthropic.types.ToolUseBlock]
+    :return: One ``tool_result`` content block per input block, in the same
+        order, each with the JSON-encoded tool return value (or error) as
+        its ``content``.
+    :rtype: list[dict]
+    """
     results = []
     for tool_use in tool_use_blocks:
         tool_name = tool_use.name
@@ -63,6 +89,28 @@ def handle_tool_calls(tool_use_blocks):
 
 @observe(name="chat_turn")
 def chat(message, history, request: gr.Request | None = None):
+    """Top-level Gradio ``ChatInterface`` callback for one chat turn.
+
+    Applies inbound rate limiting before any API call, then delegates to
+    :func:`_chat` for the actual model interaction. Anthropic API errors and
+    any other unhandled exception are caught here and converted to one of
+    the ``FALLBACK_*`` strings from :mod:`services.profile`, so a visitor
+    never sees a raw traceback or an empty reply.
+
+    :param message: The visitor's new message for this turn.
+    :type message: str
+    :param history: Prior turns as passed by Gradio's ``ChatInterface``
+        (a list of role/content dicts, possibly with extra Gradio-specific
+        keys).
+    :type history: list[dict]
+    :param request: The inbound Gradio request, used to derive a caller
+        identity for rate limiting. ``None`` when not available (e.g. in
+        tests or non-HTTP invocations).
+    :type request: gradio.Request or None
+    :return: The assistant's reply text, or a fallback message if the turn
+        was rate-limited or failed.
+    :rtype: str
+    """
     caller = rate_limit.caller_key(request)
     try:
         rate_limit.check_chat_turn(caller, message)
@@ -95,6 +143,25 @@ def chat(message, history, request: gr.Request | None = None):
 
 @observe(name="chat_turn")
 def _chat(message, history):
+    """Run the bounded tool-use loop against the Anthropic Messages API.
+
+    Rebuilds the system prompt (with prompt caching enabled) on each
+    iteration, sends the conversation to ``claude-haiku-4-5``, and, while
+    the model keeps requesting tool calls, dispatches them via
+    :func:`handle_tool_calls` and loops again — up to
+    :data:`MAX_TOOL_ITERATIONS` round trips. If the model exhausts that cap
+    without producing a final answer, the loop stops and the last response
+    is used as-is. A turn that ends with only a tool call and no visible
+    text is given a short canned acknowledgement instead of an empty reply.
+
+    :param message: The visitor's new message for this turn.
+    :type message: str
+    :param history: Prior turns as role/content dicts; Gradio-specific keys
+        are stripped before sending to the API.
+    :type history: list[dict]
+    :return: The assistant's final reply text for this turn.
+    :rtype: str
+    """
     # System prompt is a top-level parameter, not a message. History and the new
     # user turn are the only entries in the messages array.
     # Gradio's ChatInterface passes history dicts with extra keys (e.g. "metadata",

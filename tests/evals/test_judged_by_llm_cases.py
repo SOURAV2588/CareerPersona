@@ -33,6 +33,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ── dataset loading ────────────────────────────────────────────────────────
 
 def load_judged_cases():
+    """Load the ``judged:`` section of ``judged_eval_cases.yaml``.
+
+    :raises pytest.skip.Exception: If no judged cases are defined.
+    :return: The list of case dicts.
+    :rtype: list[dict]
+    """
     with open(CASES_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     cases = data.get("judged") or []
@@ -88,6 +94,14 @@ def run_conversation(case):
     "case", load_judged_cases(), ids=lambda c: c["id"]
 )
 def test_judged_case(case, tool_spy):
+    """Run one judged case and assert the judge model returns PASS.
+
+    :param case: A single case dict from ``judged_eval_cases.yaml``, with
+        ``criteria`` and either ``input`` or ``turns`` keys.
+    :type case: dict
+    :param tool_spy: Fixture that stubs tool calls so no real email is
+        sent.
+    """
     transcript = run_conversation(case)
     context = load_context(case.get("context"))
     verdict, reasoning = judge(case["criteria"], transcript, context)

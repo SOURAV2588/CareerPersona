@@ -21,10 +21,12 @@ def isolated_store(tmp_path, monkeypatch):
 
 
 def test_read_pending_returns_empty_list_when_file_missing():
+    """read_pending() returns [] rather than raising when the pending file does not exist."""
     assert question_store.read_pending() == []
 
 
 def test_store_question_creates_data_dir_and_appends_entry(isolated_store):
+    """store_question() creates the data directory and appends a valid, timestamped entry."""
     question_store.store_question("What is your favorite language?")
 
     entries = question_store.read_pending()
@@ -37,6 +39,7 @@ def test_store_question_creates_data_dir_and_appends_entry(isolated_store):
 
 
 def test_store_question_appends_multiple_in_order():
+    """Successive store_question() calls preserve insertion order in read_pending()."""
     question_store.store_question("first")
     question_store.store_question("second")
     question_store.store_question("third")
@@ -46,6 +49,7 @@ def test_store_question_appends_multiple_in_order():
 
 
 def test_read_pending_skips_blank_lines(isolated_store):
+    """Blank and whitespace-only lines in the pending file are ignored, not parsed as entries."""
     pending, _ = isolated_store
     pending.parent.mkdir(parents=True, exist_ok=True)
     pending.write_text(
@@ -61,6 +65,7 @@ def test_read_pending_skips_blank_lines(isolated_store):
 
 
 def test_clear_pending_archives_entries_and_truncates_pending(isolated_store):
+    """clear_pending() writes the given entries to the archive and empties the pending file."""
     pending, archive = isolated_store
     question_store.store_question("q1")
     question_store.store_question("q2")
@@ -74,6 +79,7 @@ def test_clear_pending_archives_entries_and_truncates_pending(isolated_store):
 
 
 def test_clear_pending_appends_to_existing_archive_without_overwriting(isolated_store):
+    """Successive clear_pending() calls append to the archive rather than overwriting it."""
     pending, archive = isolated_store
     question_store.store_question("q1")
     question_store.clear_pending(question_store.read_pending())
@@ -86,6 +92,7 @@ def test_clear_pending_appends_to_existing_archive_without_overwriting(isolated_
 
 
 def test_clear_pending_with_empty_list_still_truncates_pending_file(isolated_store):
+    """clear_pending([]) empties the pending file without creating an archive file."""
     pending, archive = isolated_store
     question_store.store_question("orphaned")
 

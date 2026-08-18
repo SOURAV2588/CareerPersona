@@ -1,3 +1,13 @@
+"""Builds the system prompt fed to the model on every chat turn.
+
+Assembles the persona instructions, background material (``resources/``
+free-text and Markdown files, plus the LinkedIn PDF extracted at runtime via
+:mod:`pypdf`), and the four ``FALLBACK_*`` strings used by ``app.py`` when a
+turn cannot be completed normally. The persona name and resource file paths
+are hardcoded in this module — it is the file to edit when repurposing the
+persona for someone else.
+"""
+
 import os
 
 from pypdf import PdfReader
@@ -26,6 +36,18 @@ FALLBACK_TOO_LONG = (
 
 
 def get_system_prompt_for_profile():
+    """Assemble the full system prompt for the persona chat.
+
+    Combines the hardcoded persona instructions with background material
+    read fresh on every call via :func:`get_summary`,
+    :func:`get_career_profile_details`, :func:`get_current_preferences`, and
+    :func:`get_linkedin_details`. Called once per turn from ``app.py``'s
+    ``_chat()`` so the prompt is rebuilt (and re-cached via
+    ``cache_control``) on every request.
+
+    :return: The complete system prompt text.
+    :rtype: str
+    """
     name = "Sourav Ghosh"
 
     system_prompt = f"""You are acting as {name}, answering questions on {name}'s personal website. \
@@ -114,6 +136,11 @@ def get_system_prompt_for_profile():
 
 
 def get_summary():
+    """Read the free-text career summary from ``resources/summary.txt``.
+
+    :return: The raw file contents.
+    :rtype: str
+    """
     summary_path = os.path.join(base_dir, "resources", "summary.txt")
     with open(summary_path, "r", encoding="utf-8") as f:
         summary = f.read()
@@ -121,6 +148,11 @@ def get_summary():
 
 
 def get_career_profile_details():
+    """Read the career profile Markdown from ``resources/SOURAV_GHOSH_CAREER_PROFILE.md``.
+
+    :return: The raw file contents.
+    :rtype: str
+    """
     career_profile_path = os.path.join(base_dir, "resources", "SOURAV_GHOSH_CAREER_PROFILE.md")
     with open(career_profile_path, "r", encoding="utf-8") as f:
         career_profile = f.read()
@@ -128,6 +160,11 @@ def get_career_profile_details():
 
 
 def get_current_preferences():
+    """Read current availability/preferences from ``resources/CURRENT_STATUS_AND_PREFERENCES.md``.
+
+    :return: The raw file contents.
+    :rtype: str
+    """
     current_preferences_path = os.path.join(base_dir, "resources", "CURRENT_STATUS_AND_PREFERENCES.md")
     with open(current_preferences_path, "r", encoding="utf-8") as f:
         current_preferences = f.read()
@@ -135,6 +172,15 @@ def get_current_preferences():
 
 
 def get_linkedin_details():
+    """Extract text from the LinkedIn export PDF at runtime.
+
+    Reads ``resources/SOURAV_GHOSH_LINKEDIN.pdf`` page by page via
+    :class:`pypdf.PdfReader` and concatenates each page's extracted text.
+    Pages that yield no extractable text are skipped.
+
+    :return: The concatenated text of all pages.
+    :rtype: str
+    """
     linkedin_resume_path = os.path.join(base_dir, "resources", "SOURAV_GHOSH_LINKEDIN.pdf")
     reader = PdfReader(linkedin_resume_path)
     linkedin = ""

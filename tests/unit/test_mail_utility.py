@@ -19,6 +19,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_get_credentials_reads_from_environment(monkeypatch):
+    """get_credentials() builds a Credentials object from the GMAIL_* environment variables."""
     monkeypatch.setenv("GMAIL_CLIENT_ID", "cid-123")
     monkeypatch.setenv("GMAIL_CLIENT_SECRET", "secret-456")
     monkeypatch.setenv("GMAIL_REFRESH_TOKEN", "refresh-789")
@@ -34,6 +35,7 @@ def test_get_credentials_reads_from_environment(monkeypatch):
 
 
 def test_init_does_not_build_service_eagerly(monkeypatch):
+    """Constructing a MailUtility does not call googleapiclient.discovery.build."""
     fake_build = MagicMock(return_value=MagicMock())
     monkeypatch.setattr("services.mail_utility.build", fake_build)
 
@@ -43,6 +45,7 @@ def test_init_does_not_build_service_eagerly(monkeypatch):
 
 
 def test_service_is_built_lazily_on_first_use_and_then_cached(monkeypatch):
+    """The Gmail client is built on first .service access and reused on subsequent accesses."""
     fake_build = MagicMock(return_value=MagicMock())
     monkeypatch.setattr("services.mail_utility.build", fake_build)
 
@@ -63,6 +66,7 @@ def test_service_is_built_lazily_on_first_use_and_then_cached(monkeypatch):
 
 
 def test_send_email_sends_base64_encoded_message_to_configured_recipient(monkeypatch):
+    """send_email() base64-encodes a well-formed MIME message addressed to GMAIL_RECIPIENT."""
     monkeypatch.setenv("GMAIL_RECIPIENT", "recipient@example.com")
 
     fake_service = MagicMock()
@@ -91,6 +95,7 @@ def test_send_email_sends_base64_encoded_message_to_configured_recipient(monkeyp
 
 
 def test_send_email_raises_clear_error_when_recipient_is_unset(monkeypatch):
+    """send_email() raises RuntimeError when GMAIL_RECIPIENT is not set."""
     monkeypatch.delenv("GMAIL_RECIPIENT", raising=False)
     monkeypatch.setattr("services.mail_utility.build", MagicMock(return_value=MagicMock()))
 
@@ -101,6 +106,7 @@ def test_send_email_raises_clear_error_when_recipient_is_unset(monkeypatch):
 
 
 def test_send_email_calls_execute_and_returns_none(monkeypatch, capsys):
+    """send_email() executes the Gmail send request and returns None, printing the message id."""
     fake_service = MagicMock()
     fake_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {
         "id": "msg-42"

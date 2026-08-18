@@ -30,11 +30,24 @@ pytestmark = pytest.mark.unit
 
 
 def tool_use_block(name, arguments, tool_id="tool_1"):
+    """Build a fake Anthropic ``tool_use`` content block.
+
+    :param name: Name of the tool being called.
+    :type name: str
+    :param arguments: Arguments the model supplied for the call.
+    :type arguments: dict
+    :param tool_id: The block's ``id``, echoed back in the tool result.
+    :type tool_id: str
+    :rtype: types.SimpleNamespace
+    """
     return SimpleNamespace(type="tool_use", name=name, input=arguments, id=tool_id)
 
 
 class TestBasicContract:
+    """Correct-path dispatch: each tool_use block is routed to the right function."""
+
     def test_record_user_details_tool_call(self, monkeypatch):
+        """A record_user_details tool_use block is dispatched with its arguments as kwargs."""
         mock = MagicMock(return_value={"recorded": "ok"})
         monkeypatch.setattr(app, "record_user_details", mock)
 
@@ -48,6 +61,7 @@ class TestBasicContract:
         ]
 
     def test_record_unknown_question_tool_call(self, monkeypatch):
+        """A record_unknown_question tool_use block is dispatched with its arguments as kwargs."""
         mock = MagicMock(return_value={"recorded": "ok"})
         monkeypatch.setattr(app, "record_unknown_question", mock)
 
@@ -61,6 +75,7 @@ class TestBasicContract:
         ]
 
     def test_unknown_tool_name_returns_error_result(self):
+        """A name matching no known tool produces an {"error": ...} result instead of raising."""
         results = app.handle_tool_calls([tool_use_block("delete_everything", {}, tool_id="id3")])
 
         assert results == [
@@ -72,6 +87,7 @@ class TestBasicContract:
         ]
 
     def test_multiple_tool_calls_preserve_order(self, monkeypatch):
+        """Results are returned in the same order as the input tool_use blocks."""
         monkeypatch.setattr(app, "record_user_details", MagicMock(return_value={"recorded": "ok"}))
         monkeypatch.setattr(app, "record_unknown_question", MagicMock(return_value={"recorded": "ok"}))
 
@@ -86,6 +102,8 @@ class TestBasicContract:
 
 
 class TestKnownBugs:
+    """Regression and known-bug coverage for the dispatcher — see SPEC.md §6."""
+
     def test_unknown_tool_does_not_leak_previous_result(self, monkeypatch):
         """Regression test for a fixed bug: handle_tool_calls() now has an
         `else` branch, so an unrecognized tool name after a real one no

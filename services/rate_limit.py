@@ -83,7 +83,13 @@ TRUST_PROXY_HEADER = _bool_env("CHAT_TRUST_PROXY_HEADER", False)
 # ── exceptions ──────────────────────────────────────────────────────────────
 
 class RateLimited(Exception):
-    """Base: this turn should not be served."""
+    """Base exception: this turn should not be served.
+
+    :param reason: Human-readable explanation, used in log messages.
+    :type reason: str
+    :param retry_after: Seconds until the caller may retry, if known.
+    :type retry_after: float or None
+    """
 
     def __init__(self, reason: str, retry_after: float | None = None) -> None:
         super().__init__(reason)
@@ -92,15 +98,15 @@ class RateLimited(Exception):
 
 
 class MessageTooLong(RateLimited):
-    """Input exceeded MESSAGE_MAX_CHARS."""
+    """Raised when input exceeds :data:`MESSAGE_MAX_CHARS`."""
 
 
 class CallerThrottled(RateLimited):
-    """This visitor is sending turns too fast."""
+    """Raised when a visitor is sending turns too fast."""
 
 
 class BudgetExhausted(RateLimited):
-    """A global daily cap has been hit; nobody is served until rollover."""
+    """Raised when a global daily cap has been hit; nobody is served until rollover."""
 
 
 # ── primitives ──────────────────────────────────────────────────────────────
@@ -112,6 +118,19 @@ class SlidingWindowLimiter:
     Caller state is bounded by ``max_keys`` and evicted least-recently-seen
     first; an attacker rotating source addresses can therefore flush honest
     callers out of the table, which is what the global daily caps are for.
+
+    :param max_events: Maximum events allowed per caller within the window.
+    :type max_events: int
+    :param window_seconds: Length of the sliding window, in seconds.
+    :type window_seconds: float
+    :param name: Label used in exception messages and logs.
+    :type name: str
+    :param max_keys: Maximum number of distinct callers tracked at once
+        before the least-recently-seen is evicted.
+    :type max_keys: int
+    :param clock: Zero-argument callable returning the current monotonic
+        time; overridable for tests.
+    :type clock: Callable[[], float]
     """
 
     def __init__(
@@ -131,6 +150,22 @@ class SlidingWindowLimiter:
         self._lock = threading.Lock()
 
     def check_and_record(self, key: str) -> None:
+        """Record an event for ``key`` and raise if it exceeds the window limit.
+
+        Expires events older than the window before checking, so the count
+        always reflects only the current sliding window. On success, the
+        new event is recorded and the caller is moved to the
+        most-recently-used end of the internal tracking table; if that
+        pushes the table over ``max_keys``, the least-recently-seen caller
+        is evicted.
+
+        :param key: Identity of the caller making this event (see
+            :func:`caller_key`).
+        :type key: str
+        :raises CallerThrottled: If ``key`` has already used
+            ``max_events`` within the current window.
+        :return: None
+        """
         now = self._clock()
         cutoff = now - self._window
         with self._lock:
@@ -156,12 +191,27 @@ class SlidingWindowLimiter:
                 self._hits.popitem(last=False)
 
     def reset(self) -> None:
+        """Clear all tracked callers and their event history.
+
+        :return: None
+        """
         with self._lock:
             self._hits.clear()
 
 
 class DailyBudget:
-    """Thread-safe counter that resets at local midnight in ``TIMEZONE``."""
+    """Thread-safe counter that resets at local midnight in ``TIMEZONE``.
+
+    :param max_units: Maximum units allowed per day before
+        :func:`ensure_available` raises.
+    :type max_units: int
+    :param name: Label used in exception messages and logs.
+    :type name: str
+    :param clock: Zero-argument callable returning the current
+        timezone-aware ``datetime``; defaults to ``now()`` in
+        :data:`TIMEZONE`. Overridable for tests.
+    :type clock: Callable[[], datetime] or None
+    """
 
     def __init__(
         self,
@@ -177,6 +227,12 @@ class DailyBudget:
         self._lock = threading.Lock()
 
     def _roll_locked(self) -> None:
+        """Reset ``_used`` to zero if the local date has advanced since the last check.
+
+        Must be called with ``self._lock`` already held.
+
+        :return: None
+        """
         today = self._clock().date()
         if today != self._day:
             if self._day is not None:
@@ -185,7 +241,15 @@ class DailyBudget:
             self._used = 0
 
     def ensure_available(self, units: int = 1) -> None:
-        """Raise if the budget is already spent. Does not consume anything."""
+        """Raise if the budget is already spent. Does not consume anything.
+
+        :param units: Number of units that would be consumed, checked
+            against the remaining budget without actually consuming them.
+        :type units: int
+        :raises BudgetExhausted: If ``used + units`` would exceed
+            ``max_units`` for today.
+        :return: None
+        """
         with self._lock:
             self._roll_locked()
             if self._used + units > self._max:
@@ -193,7 +257,13 @@ class DailyBudget:
 
     def record(self, units: int = 1) -> None:
         """Consume budget. Deliberately allows overshoot on the final turn —
-        token cost is only known after the call returns."""
+        token cost is only known after the call returns.
+
+        :param units: Number of units to add to today's usage. Values
+            ``<= 0`` are a no-op.
+        :type units: int
+        :return: None
+        """
         if units <= 0:
             return
         with self._lock:
@@ -202,11 +272,19 @@ class DailyBudget:
 
     @property
     def used(self) -> int:
+        """Units consumed so far today (after rolling over if the date changed).
+
+        :rtype: int
+        """
         with self._lock:
             self._roll_locked()
             return self._used
 
     def reset(self) -> None:
+        """Clear the counter, forcing a fresh day on next use.
+
+        :return: None
+        """
         with self._lock:
             self._day = None
             self._used = 0
@@ -232,6 +310,14 @@ def caller_key(request) -> str:
     IP is the best available signal for an unauthenticated endpoint. It is
     imperfect — shared NAT lumps colleagues together, and a rotating client
     escapes it — so it is a speed bump, backed by the global daily caps.
+
+    :param request: The inbound Gradio request, or ``None``.
+    :type request: gradio.Request or None
+    :return: ``"unknown"`` if no request is available; otherwise, in order
+        of preference: the ``X-Forwarded-For`` header's first entry (only
+        if :data:`TRUST_PROXY_HEADER` is set), the connecting client's
+        host, or the Gradio session hash.
+    :rtype: str
     """
     if request is None:
         return "unknown"
@@ -257,14 +343,34 @@ def caller_key(request) -> str:
 
 
 def set_current_caller(key: str) -> Token:
+    """Bind the given caller identity to the current context.
+
+    :param key: Caller identity, typically from :func:`caller_key`.
+    :type key: str
+    :return: A token that must be passed to :func:`reset_current_caller`
+        to restore the previous value.
+    :rtype: contextvars.Token
+    """
     return _current_caller.set(key)
 
 
 def reset_current_caller(token: Token) -> None:
+    """Undo a prior :func:`set_current_caller` call.
+
+    :param token: The token returned by the matching
+        :func:`set_current_caller` call.
+    :type token: contextvars.Token
+    :return: None
+    """
     _current_caller.reset(token)
 
 
 def get_current_caller() -> str:
+    """Return the caller identity bound in the current context.
+
+    :return: The current caller key, or ``"unknown"`` if none is bound.
+    :rtype: str
+    """
     return _current_caller.get()
 
 
@@ -275,6 +381,18 @@ def check_chat_turn(caller: str, message: str) -> None:
 
     Ordered so that the free checks run first and a rejected caller never
     consumes global budget.
+
+    :param caller: Caller identity, typically from :func:`caller_key`.
+    :type caller: str
+    :param message: The visitor's message for this turn.
+    :type message: str
+    :raises MessageTooLong: If ``message`` exceeds
+        :data:`MESSAGE_MAX_CHARS`.
+    :raises BudgetExhausted: If the global daily token or turn budget is
+        already spent.
+    :raises CallerThrottled: If this caller has exceeded the burst or
+        sustained window limits.
+    :return: None
     """
     if message is not None and len(message) > MESSAGE_MAX_CHARS:
         raise MessageTooLong(f"message is {len(message)} chars (max {MESSAGE_MAX_CHARS})")
@@ -287,7 +405,14 @@ def check_chat_turn(caller: str, message: str) -> None:
 
 
 def check_contact_email(caller: str) -> None:
-    """Raise if this caller has already triggered enough notification emails."""
+    """Raise if this caller has already triggered enough notification emails.
+
+    :param caller: Caller identity, typically from :func:`caller_key`.
+    :type caller: str
+    :raises CallerThrottled: If ``caller`` has already sent
+        :data:`EMAIL_MAX_PER_CALLER` contact emails within the window.
+    :return: None
+    """
     CONTACT_EMAILS.check_and_record(caller)
 
 
@@ -299,6 +424,11 @@ def record_usage(usage) -> None:
     that these are raw counts, not cost-weighted: cache reads bill at 0.1x
     input and cache writes at 1.25x, and output is priced higher than input.
     If you want a dollar cap rather than a token cap, weight them here.
+
+    :param usage: The ``usage`` object from an Anthropic API response, or
+        ``None``.
+    :type usage: anthropic.types.Usage or None
+    :return: None
     """
     if usage is None:
         return
@@ -315,6 +445,9 @@ def record_usage(usage) -> None:
 
 
 def reset_all() -> None:
-    """Test helper — clears every counter."""
+    """Test helper — clears every counter.
+
+    :return: None
+    """
     for limiter in (BURST, SUSTAINED, CONTACT_EMAILS, DAILY_TURNS, DAILY_TOKENS):
         limiter.reset()

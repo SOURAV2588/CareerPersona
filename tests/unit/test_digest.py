@@ -17,7 +17,10 @@ def reset_scheduler_singleton(monkeypatch):
 
 
 class TestBuildMessageSubjectAndBody:
+    """Formatting of the digest email's subject and body."""
+
     def test_formats_single_entry(self):
+        """One pending entry produces a subject with count 1 and a numbered body line."""
         entries = [{"question": "What is your stack?", "timestamp": "2026-08-17T10:00:00+00:00"}]
 
         subject, body = digest._build_message_subject_and_body(entries)
@@ -27,6 +30,7 @@ class TestBuildMessageSubjectAndBody:
         assert "2026-08-17T10:00:00+00:00" in body
 
     def test_formats_multiple_entries_numbered_in_order(self):
+        """Multiple entries are numbered 1..N in the order given."""
         entries = [
             {"question": "Q1", "timestamp": "t1"},
             {"question": "Q2", "timestamp": "t2"},
@@ -42,6 +46,7 @@ class TestBuildMessageSubjectAndBody:
         assert any(line.startswith("3. Q3") for line in lines)
 
     def test_missing_timestamp_falls_back_to_unknown_time(self):
+        """An entry with no timestamp key renders as "(unknown time)" rather than raising."""
         entries = [{"question": "No timestamp here"}]
 
         _, body = digest._build_message_subject_and_body(entries)
@@ -49,6 +54,7 @@ class TestBuildMessageSubjectAndBody:
         assert "(unknown time)" in body
 
     def test_subject_contains_todays_date(self):
+        """The subject line includes today's date in "%d %b %Y" format."""
         entries = [{"question": "Q", "timestamp": "t"}]
 
         subject, _ = digest._build_message_subject_and_body(entries)
@@ -58,7 +64,10 @@ class TestBuildMessageSubjectAndBody:
 
 
 class TestSendDailyDigest:
+    """send_daily_digest()'s fetch → send → mark-sent sequencing."""
+
     def test_noop_when_no_pending_questions(self, monkeypatch):
+        """No email is sent and nothing is marked sent when there are no pending questions."""
         monkeypatch.setattr(digest, "fetch_pending", MagicMock(return_value=[]))
         fake_mail_util = MagicMock()
         monkeypatch.setattr(digest, "mail_util", fake_mail_util)
@@ -71,6 +80,7 @@ class TestSendDailyDigest:
         mark_sent.assert_not_called()
 
     def test_sends_email_and_archives_on_success(self, monkeypatch):
+        """Pending questions are emailed and then marked sent by id."""
         entries = [{"id": 1, "question": "Q1", "timestamp": "t1"}]
         monkeypatch.setattr(digest, "fetch_pending", MagicMock(return_value=entries))
         mark_sent = MagicMock()
@@ -88,6 +98,7 @@ class TestSendDailyDigest:
         mark_sent.assert_called_once_with([1])
 
     def test_send_failure_propagates_and_leaves_pending_unmarked(self, monkeypatch):
+        """If sending raises, the exception propagates and mark_sent is never called."""
         entries = [{"id": 1, "question": "Q1", "timestamp": "t1"}]
         monkeypatch.setattr(digest, "fetch_pending", MagicMock(return_value=entries))
         mark_sent = MagicMock()
@@ -104,7 +115,10 @@ class TestSendDailyDigest:
 
 
 class TestStartScheduler:
+    """start_scheduler()'s job configuration and idempotency."""
+
     def test_creates_cron_job_with_expected_schedule(self, monkeypatch):
+        """The scheduler is created with a 21:30 Asia/Kolkata cron job for send_daily_digest."""
         fake_scheduler = MagicMock()
         fake_scheduler_cls = MagicMock(return_value=fake_scheduler)
 
@@ -123,6 +137,7 @@ class TestStartScheduler:
         fake_scheduler.start.assert_called_once()
 
     def test_second_call_is_a_noop(self, monkeypatch):
+        """A second start_scheduler() call does not construct a second scheduler."""
         fake_scheduler_cls = MagicMock(return_value=MagicMock())
 
         with patch("apscheduler.schedulers.background.BackgroundScheduler", fake_scheduler_cls):

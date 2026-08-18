@@ -44,6 +44,22 @@ no markdown fences:
 # ── the judge ──────────────────────────────────────────────────────────────
 
 def _judge_once(client, criteria, transcript, context):
+    """Send one grading request to the judge model and parse its verdict.
+
+    :param client: An Anthropic client to grade with.
+    :type client: anthropic.Anthropic
+    :param criteria: Free-text grading criteria for this case.
+    :type criteria: str
+    :param transcript: The conversation transcript to grade.
+    :type transcript: str
+    :param context: Background material the chatbot was working from, if
+        any.
+    :type context: str or None
+    :raises pytest.fail.Exception: If the judge's response is not
+        parseable JSON, or its ``verdict`` is not ``"PASS"``/``"FAIL"``.
+    :return: A ``(verdict, reasoning)`` tuple.
+    :rtype: tuple[str, str]
+    """
     parts = [f"## Grading criteria\n{criteria.strip()}"]
     if context:
         parts.append(f"## Background material available to the chatbot\n{context}")
@@ -72,7 +88,23 @@ def _judge_once(client, criteria, transcript, context):
 
 
 def judge(criteria, transcript, context=None):
-    """Grade a transcript. Pure — takes text, so it can be tested directly."""
+    """Grade a transcript. Pure — takes text, so it can be tested directly.
+
+    Samples the judge model :data:`JUDGE_SAMPLES` times and takes a
+    majority vote, to damp borderline flake.
+
+    :param criteria: Free-text grading criteria for this case.
+    :type criteria: str
+    :param transcript: The conversation transcript to grade.
+    :type transcript: str
+    :param context: Background material the chatbot was working from, if
+        any.
+    :type context: str or None
+    :return: A ``(verdict, reasoning)`` tuple, where ``verdict`` is
+        ``"PASS"`` or ``"FAIL"`` and ``reasoning`` concatenates each
+        sample's reasoning.
+    :rtype: tuple[str, str]
+    """
     client = anthropic.Anthropic()
 
     results = [

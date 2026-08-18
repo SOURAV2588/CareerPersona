@@ -71,6 +71,16 @@ def test_send_email_sends_base64_encoded_message_to_configured_recipient(monkeyp
     fake_service.users.return_value.messages.return_value.send.return_value.execute.assert_called_once()
 
 
+def test_send_email_raises_clear_error_when_recipient_is_unset(monkeypatch):
+    monkeypatch.delenv("GMAIL_RECIPIENT", raising=False)
+    monkeypatch.setattr("services.mail_utility.build", MagicMock(return_value=MagicMock()))
+
+    mail_util = MailUtility()
+
+    with pytest.raises(RuntimeError, match="GMAIL_RECIPIENT"):
+        mail_util.send_email(subject="Subj", body="Body")
+
+
 def test_send_email_calls_execute_and_returns_none(monkeypatch, capsys):
     fake_service = MagicMock()
     fake_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {

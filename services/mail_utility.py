@@ -16,8 +16,12 @@ class MailUtility:
         self.service = build("gmail", "v1", credentials=creds)
 
     def send_email(self, subject, body):
+        recipient = os.getenv("GMAIL_RECIPIENT")
+        if not recipient:
+            raise RuntimeError("GMAIL_RECIPIENT environment variable is not set")
+
         message = EmailMessage()
-        message["To"] = os.getenv("GMAIL_RECIPIENT")
+        message["To"] = recipient
         message["Subject"] = subject
         message.set_content(body)
 

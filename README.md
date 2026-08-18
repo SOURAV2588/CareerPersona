@@ -305,6 +305,8 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 
 **Two eval layers instead of one.** Deterministic assertions are cheap and catch clear-cut regressions (wrong tool, wrong argument, a banned phrase) but can't judge tone or nuance. An LLM judge can, but is itself fallible, so it's checked against hand-labeled calibration cases before its verdicts on real cases are trusted.
 
+**Docstrings throughout.** Every module, class, and function in `app.py`, `services/`, and `tests/` carries a reStructuredText-style docstring (`:param:`, `:return:`, `:raises:`, etc.), not just the small subset that happened to need one for a docs tool. See `SPEC.md` §17.
+
 ## Rate limiting
 
 `services/rate_limit.py` protects the public chat endpoint from both abuse and runaway API spend. `chat()` checks every turn against a stack of guards, cheapest first, so a rejected turn never reaches the Anthropic API:

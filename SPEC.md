@@ -4,9 +4,10 @@ Technical specification for the "Career Persona" project. This document reflects
 the codebase as of 2026-08-18 (post error-handling, richer-persona-prompt,
 resource-file rename, judged eval suite, inbound rate-limiting/spend-cap, the
 Postgres-backed question-store migration — write and read sides now
-reconnected, see §2, §9 — plus MIT licensing, see §16, and the judged eval
+reconnected, see §2, §9 — plus MIT licensing, see §16, the judged eval
 dataset's context/criteria fixes that produced its first clean full run, see
-§12/§15).
+§12/§15, and a full reStructuredText docstring pass over `app.py`,
+`services/`, and `tests/`, see §17).
 
 ## 1. Purpose
 
@@ -811,3 +812,39 @@ All third-party runtime dependencies (§13) are MIT, BSD or Apache-2.0. None
 carry copyleft obligations, so MIT on this project's own code creates no
 conflict. Worth re-checking with `pip-licenses` if the pinned versions in
 `requirements.txt` are ever bumped.
+
+## 17. Documentation conventions
+
+Every module, class, and function under `app.py`, `services/`, and `tests/`
+now carries a docstring in reStructuredText (reST) field-list style —
+`:param:`/`:type:` for arguments, `:return:`/`:rtype:` for return values,
+`:raises:` for exceptions the caller should expect. This is a documentation-
+only pass: no runtime behavior changed, and the plain `pytest` run still
+reports `69 passed, 47 deselected, 2 xfailed` (§15), unchanged from before it.
+
+- **`app.py`, `services/*.py`** — module-level docstrings describe each
+  file's role in the architecture (§2); function/method docstrings document
+  parameters, return values, and side effects (e.g. `services/tools.py`'s
+  `record_user_details` now documents the silent-suppression behavior
+  described in §6, and `services/rate_limit.py`'s classes/methods carry full
+  field lists alongside the prose already there, §7).
+- **`services/question_store.py`** picked up a module-level `.. note::`
+  pointing at `services/question_store_db.py` as the live store — a docs-only
+  flag for the dead-code situation tracked in §12, item 4, not a functional
+  change.
+- **`tests/`** — every test module has a module docstring (added where
+  missing, e.g. `tests/unit/test_question_store_db.py`,
+  `tests/sanity_checks/langfuse_test.py`); test classes and fixtures document
+  what they group or set up; individual test functions carry a one-line
+  docstring stating the behavior under test, rather than relying solely on
+  the test name. Docstrings that already existed and described a known bug
+  (e.g. the `xfail(strict=True)` cases in
+  `tests/unit/test_app_tool_dispatch.py::TestKnownBugs`, and the stale
+  narratives flagged in §12, item 3) were left as-is — narrowing or
+  correcting those is a separate, deliberate edit, not a side effect of a
+  documentation pass.
+- Empty `__init__.py` files (`tests/__init__.py`, `tests/evals/__init__.py`,
+  `tests/unit/__init__.py`) were left empty — there is nothing to document.
+- `venv/` (vendored third-party packages) and the top-level `*.md` files are
+  out of scope for this convention; it applies to first-party Python source
+  only.

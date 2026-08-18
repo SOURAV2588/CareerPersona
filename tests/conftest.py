@@ -21,6 +21,8 @@ module that in turn imports ``services.tools`` / ``services.mail_utility``.
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 os.environ.setdefault("GMAIL_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GMAIL_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("GMAIL_REFRESH_TOKEN", "test-refresh-token")
@@ -32,3 +34,17 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
 # MailUtility instance constructed elsewhere in the suite.
 _build_patcher = patch("googleapiclient.discovery.build", side_effect=lambda *a, **kw: MagicMock())
 _build_patcher.start()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """services.rate_limit's counters are module-level singletons keyed by
+    caller and backed by the real wall clock. Without resetting them, tests
+    across a file that all use the default "unknown" caller (no gr.Request)
+    accumulate hits against each other and trip BURST/CONTACT_EMAILS/etc.
+    depending on test order and how fast the suite runs."""
+    from services import rate_limit
+
+    rate_limit.reset_all()
+    yield
+    rate_limit.reset_all()

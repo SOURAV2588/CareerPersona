@@ -3,7 +3,8 @@
 app.client is a real anthropic.Anthropic() instance constructed at import
 time; every test below replaces its .messages.create with a MagicMock so no
 network call is ever made. The system-prompt builder is stubbed too, since it
-otherwise reads the real résumé PDF/summary.txt on every call.
+otherwise reads the real background files (SUMMARY.md and the other
+resources/ files) on every call.
 
 For app.handle_tool_calls() itself, see test_app_tool_dispatch.py.
 """

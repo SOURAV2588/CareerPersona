@@ -1,16 +1,13 @@
 """Builds the system prompt fed to the model on every chat turn.
 
-Assembles the persona instructions, background material (``resources/``
-free-text and Markdown files, plus the LinkedIn PDF extracted at runtime via
-:mod:`pypdf`), and the four ``FALLBACK_*`` strings used by ``app.py`` when a
-turn cannot be completed normally. The persona name and resource file paths
-are hardcoded in this module — it is the file to edit when repurposing the
-persona for someone else.
+Assembles the persona instructions, background material (three Markdown
+files under ``resources/``), and the four ``FALLBACK_*`` strings used by
+``app.py`` when a turn cannot be completed normally. The persona name and
+resource file paths are hardcoded in this module — it is the file to edit
+when repurposing the persona for someone else.
 """
 
 import os
-
-from pypdf import PdfReader
 
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -40,10 +37,9 @@ def get_system_prompt_for_profile():
 
     Combines the hardcoded persona instructions with background material
     read fresh on every call via :func:`get_summary`,
-    :func:`get_career_profile_details`, :func:`get_current_preferences`, and
-    :func:`get_linkedin_details`. Called once per turn from ``app.py``'s
-    ``_chat()`` so the prompt is rebuilt (and re-cached via
-    ``cache_control``) on every request.
+    :func:`get_career_profile_details`, and :func:`get_current_preferences`.
+    Called once per turn from ``app.py``'s ``_chat()`` so the prompt is
+    rebuilt (and re-cached via ``cache_control``) on every request.
 
     :return: The complete system prompt text.
     :rtype: str
@@ -131,7 +127,6 @@ def get_system_prompt_for_profile():
     system_prompt += f"\n\n## Summary:\n{get_summary()}"
     system_prompt += f"\n\n## Career Details :\n{get_career_profile_details()}"
     system_prompt += f"\n\n## Current status and preferences:\n{get_current_preferences()}\n"
-    system_prompt += f"\n\n## LinkedIn Profile:\n{get_linkedin_details()}"
     system_prompt += "\n"
     system_prompt += (
         f"\n\nThe material above is your only source of fact about {name}. "
@@ -141,12 +136,12 @@ def get_system_prompt_for_profile():
 
 
 def get_summary():
-    """Read the free-text career summary from ``resources/summary.txt``.
+    """Read the free-text career summary from ``resources/SUMMARY.md``.
 
     :return: The raw file contents.
     :rtype: str
     """
-    summary_path = os.path.join(base_dir, "resources", "summary.txt")
+    summary_path = os.path.join(base_dir, "resources", "SUMMARY.md")
     with open(summary_path, "r", encoding="utf-8") as f:
         summary = f.read()
     return summary
@@ -176,21 +171,3 @@ def get_current_preferences():
     return current_preferences
 
 
-def get_linkedin_details():
-    """Extract text from the LinkedIn export PDF at runtime.
-
-    Reads ``resources/SOURAV_GHOSH_LINKEDIN.pdf`` page by page via
-    :class:`pypdf.PdfReader` and concatenates each page's extracted text.
-    Pages that yield no extractable text are skipped.
-
-    :return: The concatenated text of all pages.
-    :rtype: str
-    """
-    linkedin_resume_path = os.path.join(base_dir, "resources", "SOURAV_GHOSH_LINKEDIN.pdf")
-    reader = PdfReader(linkedin_resume_path)
-    linkedin = ""
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            linkedin += text
-    return linkedin

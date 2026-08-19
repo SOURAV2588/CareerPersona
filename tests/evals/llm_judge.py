@@ -43,7 +43,7 @@ no markdown fences:
 
 # ── the judge ──────────────────────────────────────────────────────────────
 
-def _judge_once(client, criteria, transcript, context):
+def _judge_once(client, criteria, transcript, context, max_tokens=768):
     """Send one grading request to the judge model and parse its verdict.
 
     :param client: An Anthropic client to grade with.
@@ -55,8 +55,15 @@ def _judge_once(client, criteria, transcript, context):
     :param context: Background material the chatbot was working from, if
         any.
     :type context: str or None
-    :raises pytest.fail.Exception: If the judge's response is not
-        parseable JSON, or its ``verdict`` is not ``"PASS"``/``"FAIL"``.
+    :param max_tokens: Token budget for this attempt. If the judge's reply
+        is cut off mid-JSON, retried once with double the budget (up to
+        1536) before giving up — a verbose ``reasoning`` field occasionally
+        overruns a tight budget even though the prompt asks for at most two
+        sentences.
+    :type max_tokens: int
+    :raises pytest.fail.Exception: If the judge's response is still not
+        parseable JSON after the retry, or its ``verdict`` is not
+        ``"PASS"``/``"FAIL"``.
     :return: A ``(verdict, reasoning)`` tuple.
     :rtype: tuple[str, str]
     """
@@ -67,7 +74,7 @@ def _judge_once(client, criteria, transcript, context):
 
     response = client.messages.create(
         model=JUDGE_MODEL,
-        max_tokens=512,
+        max_tokens=max_tokens,
         system=JUDGE_SYSTEM,
         messages=[{"role": "user", "content": "\n\n".join(parts)}],
     )
@@ -78,7 +85,9 @@ def _judge_once(client, criteria, transcript, context):
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        pytest.fail(f"judge did not return parseable JSON:\n{raw}")
+        if max_tokens < 1536:
+            return _judge_once(client, criteria, transcript, context, max_tokens=max_tokens * 2)
+        pytest.fail(f"judge did not return parseable JSON after retry:\n{raw}")
 
     verdict = str(parsed.get("verdict", "")).upper()
     if verdict not in {"PASS", "FAIL"}:
@@ -105,7 +114,7 @@ def judge(criteria, transcript, context=None):
         sample's reasoning.
     :rtype: tuple[str, str]
     """
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(max_retries=4, timeout=30.0)
 
     results = [
         _judge_once(client, criteria, transcript, context)

@@ -1,6 +1,0 @@
-Hi, I am Sourav Ghosh. I am a Senior Software Engineer with experience designing and operating scalable,
-distributed backend systems using Java, Spring, Python, and AWS. I have owned mission-critical services and data pipelines
-in highly regulated environments, balancing correctness, performance, and reliability at scale. I am strong in system design,
-cloud infrastructure, and API-driven architectures, with a track record of improving system robustness, test coverage,
-and operational efficiency. I bring in a product-oriented mindset, sound engineering judgment, and growing leadership capability,
-with clear intent to operate at Staff/Tech Lead scope over time.

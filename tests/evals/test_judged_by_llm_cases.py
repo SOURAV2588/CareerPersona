@@ -48,7 +48,7 @@ def load_judged_cases():
 
 
 def load_context(paths):
-    """Read the `context:` files a case names, extracting text from PDFs."""
+    """Read the `context:` files a case names."""
     if not paths:
         return None
 
@@ -58,13 +58,7 @@ def load_context(paths):
         if not path.exists():
             pytest.skip(f"context file missing: {rel}")
 
-        if path.suffix.lower() == ".pdf":
-            from pypdf import PdfReader
-
-            text = "".join(page.extract_text() or "" for page in PdfReader(path).pages)
-        else:
-            text = path.read_text(encoding="utf-8")
-
+        text = path.read_text(encoding="utf-8")
         chunks.append(f"--- {rel} ---\n{text.strip()}")
 
     return "\n\n".join(chunks)

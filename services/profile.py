@@ -1,15 +1,14 @@
 """Builds the system prompt fed to the model on every chat turn.
 
 Assembles the persona instructions, background material (three Markdown
-files under ``resources/``), and the four ``FALLBACK_*`` strings used by
-``app.py`` when a turn cannot be completed normally. The persona name and
-resource file paths are hardcoded in this module — it is the file to edit
-when repurposing the persona for someone else.
+files, fetched via :mod:`services.resource_store`), and the four
+``FALLBACK_*`` strings used by ``app.py`` when a turn cannot be completed
+normally. The persona name and resource filenames are hardcoded in this
+module — it is the file to edit when repurposing the persona for someone
+else.
 """
 
-import os
-
-base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from services.resource_store import get_resource
 
 FALLBACK_BUSY = (
     "Sorry — I'm getting a lot of traffic at the moment and couldn't put a "
@@ -135,39 +134,28 @@ def get_system_prompt_for_profile():
     return system_prompt
 
 
-def get_summary():
-    """Read the free-text career summary from ``resources/SUMMARY.md``.
+def get_summary() -> str:
+    """Fetch the free-text career summary, ``SUMMARY.md``.
 
-    :return: The raw file contents.
+    :return: The file contents.
     :rtype: str
     """
-    summary_path = os.path.join(base_dir, "resources", "SUMMARY.md")
-    with open(summary_path, "r", encoding="utf-8") as f:
-        summary = f.read()
-    return summary
+    return get_resource("SUMMARY.md")
 
 
-def get_career_profile_details():
-    """Read the career profile Markdown from ``resources/CAREER_PROFILE.md``.
+def get_career_profile_details() -> str:
+    """Fetch the detailed, structured career profile, ``CAREER_PROFILE.md``.
 
-    :return: The raw file contents.
+    :return: The file contents.
     :rtype: str
     """
-    career_profile_path = os.path.join(base_dir, "resources", "CAREER_PROFILE.md")
-    with open(career_profile_path, "r", encoding="utf-8") as f:
-        career_profile = f.read()
-    return career_profile
+    return get_resource("CAREER_PROFILE.md")
 
 
-def get_current_preferences():
-    """Read current availability/preferences from ``resources/CURRENT_STATUS_AND_PREFERENCES.md``.
+def get_current_preferences() -> str:
+    """Fetch current availability/preferences, ``CURRENT_STATUS_AND_PREFERENCES.md``.
 
-    :return: The raw file contents.
+    :return: The file contents.
     :rtype: str
     """
-    current_preferences_path = os.path.join(base_dir, "resources", "CURRENT_STATUS_AND_PREFERENCES.md")
-    with open(current_preferences_path, "r", encoding="utf-8") as f:
-        current_preferences = f.read()
-    return current_preferences
-
-
+    return get_resource("CURRENT_STATUS_AND_PREFERENCES.md")

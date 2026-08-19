@@ -1,4 +1,16 @@
-"""Tests for services.profile — persona system-prompt construction."""
+"""Tests for services.profile — persona system-prompt construction.
+
+get_summary()/get_career_profile_details()/get_current_preferences() are
+thin wrappers around services.resource_store.get_resource(), which — when
+RESOURCES_DATASET_REPO is set in the environment — fetches from the real
+Hugging Face Hub. The tests below mock profile.get_resource (the name bound
+into this module's namespace) rather than calling through to it, so the
+unit layer stays hermetic regardless of what's in the environment/.env.
+Real readability of the background files (local or Hub-backed) is checked
+by tests/sanity_checks/resource_store_test.py instead.
+"""
+
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -7,23 +19,31 @@ from services import profile
 pytestmark = pytest.mark.unit
 
 
-def test_get_summary_reads_resources_summary_md():
-    """get_summary() reads the real SUMMARY.md and returns non-empty content mentioning the persona."""
-    content = profile.get_summary()
-    assert "Sourav Ghosh" in content
-    assert content.strip() != ""
+def test_get_summary_fetches_summary_md(monkeypatch):
+    """get_summary() fetches SUMMARY.md via the resource store."""
+    mock_get_resource = MagicMock(return_value="SUMMARY_CONTENT")
+    monkeypatch.setattr(profile, "get_resource", mock_get_resource)
+
+    assert profile.get_summary() == "SUMMARY_CONTENT"
+    mock_get_resource.assert_called_once_with("SUMMARY.md")
 
 
-def test_get_career_profile_details_reads_career_profile_md():
-    """get_career_profile_details() reads the real career profile Markdown and returns non-empty content."""
-    content = profile.get_career_profile_details()
-    assert content.strip() != ""
+def test_get_career_profile_details_fetches_career_profile_md(monkeypatch):
+    """get_career_profile_details() fetches CAREER_PROFILE.md via the resource store."""
+    mock_get_resource = MagicMock(return_value="CAREER_CONTENT")
+    monkeypatch.setattr(profile, "get_resource", mock_get_resource)
+
+    assert profile.get_career_profile_details() == "CAREER_CONTENT"
+    mock_get_resource.assert_called_once_with("CAREER_PROFILE.md")
 
 
-def test_get_current_preferences_reads_current_status_md():
-    """get_current_preferences() reads the real current-status Markdown and returns non-empty content."""
-    content = profile.get_current_preferences()
-    assert content.strip() != ""
+def test_get_current_preferences_fetches_current_status_md(monkeypatch):
+    """get_current_preferences() fetches CURRENT_STATUS_AND_PREFERENCES.md via the resource store."""
+    mock_get_resource = MagicMock(return_value="PREFS_CONTENT")
+    monkeypatch.setattr(profile, "get_resource", mock_get_resource)
+
+    assert profile.get_current_preferences() == "PREFS_CONTENT"
+    mock_get_resource.assert_called_once_with("CURRENT_STATUS_AND_PREFERENCES.md")
 
 
 def test_get_system_prompt_includes_name_summary_and_career_details(monkeypatch):

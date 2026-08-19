@@ -90,15 +90,16 @@ career-persona/
 ├── app.py                                     Entry point: chat loop, error handling, tool dispatch, Gradio launch
 ├── services/
 │   ├── profile.py                             Builds the system prompt from background files; fallback message strings
+│   ├── resource_store.py                      Fetches/caches the background files — local resources/ or a private HF Dataset repo
 │   ├── tools.py                                The two model-callable tools and their schemas
 │   ├── rate_limit.py                           Inbound rate limits and spend caps for the chat endpoint
 │   ├── mail_utility.py                         Gmail API client wrapper
 │   ├── db.py                                   Postgres connection pool + schema for the unknown_questions table
 │   ├── question_store.py                       Postgres-backed pending-question store — used by both tools.py (write) and digest.py (read)
 │   └── digest.py                               Daily digest email and its scheduler
-├── resources/
+├── resources/                                  Local fallback copy of the background files (see Add your own content)
 │   ├── SUMMARY.md                              Short bio
-│   ├── SOURAV_GHOSH_CAREER_PROFILE.md          Detailed, structured career profile
+│   ├── CAREER_PROFILE.md                       Detailed, structured career profile
 │   └── CURRENT_STATUS_AND_PREFERENCES.md       Notice period, relocation, role type, redirect policy
 ├── tests/
 │   ├── conftest.py                             Session-wide test isolation (mail/API stubs, rate-limit reset)
@@ -146,13 +147,27 @@ pip install -r requirements-dev.txt
 
 ### Add your own content
 
-The persona is driven by three files in `resources/`, all read fresh on every chat turn:
+The persona is driven by three Markdown files, fetched through `services/resource_store.py`:
 
 - `SUMMARY.md` — a short bio.
-- `SOURAV_GHOSH_CAREER_PROFILE.md` — a longer, structured career profile (roles, skills, domain experience).
+- `CAREER_PROFILE.md` — a longer, structured career profile (roles, skills, domain experience).
 - `CURRENT_STATUS_AND_PREFERENCES.md` — notice period, relocation, and the policy for redirecting compensation/reasons-for-leaving questions to email instead of answering them.
 
-Replace all three with your own. If you rename any of them, update the filename in the matching `get_*()` function in `services/profile.py`. The persona name is currently hardcoded in the same file.
+By default they're read from the local `resources/` directory. Replace all three with your own; if you rename any of them, update the filename string in the matching `get_*()` function in `services/profile.py`. The persona name is currently hardcoded in the same file.
+
+Each file is fetched **once per process and cached in memory**, not read fresh on every turn — editing a file (local or Hub-hosted) requires a process restart to take effect.
+
+#### Optional: host the background files on a private Hugging Face Dataset
+
+Set `RESOURCES_DATASET_REPO` (e.g. `you/career-persona-resources`) and a read-scoped `HF_TOKEN` to fetch the three files from a private Hugging Face Dataset repo instead of the local `resources/` directory — useful for deploying without shipping personal biographical content in the source repo. `RESOURCES_DATASET_REVISION` optionally pins a git revision (default `main`). See [Configuration](#configuration).
+
+Verify the dataset is reachable and every file is readable with:
+
+```bash
+python -m tests.sanity_checks.resource_store_test
+```
+
+Leave `RESOURCES_DATASET_REPO` unset to use the local `resources/` directory (the default for development and the test suites).
 
 ### Set up Gmail credentials
 
@@ -203,6 +218,9 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Authenticates calls to the Claude API |
 | `DATABASE_URL` | Recommended | Postgres connection string for the pending-questions table — the app calls `init_db()` on startup, but a missing/unreachable value is logged and the app starts anyway; `record_unknown_question` and the daily digest just won't work until it's set (see [Prerequisites](#prerequisites)) |
+| `RESOURCES_DATASET_REPO` | Optional | Private Hugging Face Dataset repo id (e.g. `you/career-persona-resources`) holding the three background Markdown files — unset means "read from the local `resources/` directory" (see [Add your own content](#add-your-own-content)) |
+| `RESOURCES_DATASET_REVISION` | Optional | Git revision of the dataset repo to pin to (default `main`) — only relevant when `RESOURCES_DATASET_REPO` is set |
+| `HF_TOKEN` | For HF dataset | Read-scoped Hugging Face token — required only when `RESOURCES_DATASET_REPO` is set; a private dataset can't be read anonymously |
 | `GMAIL_CLIENT_ID` | For email | OAuth client ID |
 | `GMAIL_CLIENT_SECRET` | For email | OAuth client secret |
 | `GMAIL_REFRESH_TOKEN` | For email | Long-lived token used to mint access tokens |
@@ -252,6 +270,12 @@ To verify your Langfuse connection:
 python -m tests.sanity_checks.langfuse_test
 ```
 
+If you've set `RESOURCES_DATASET_REPO`, verify the Hugging Face dataset is reachable and every background file is readable:
+
+```bash
+python -m tests.sanity_checks.resource_store_test
+```
+
 ## Testing
 
 The suite has two layers with different costs, separated by pytest markers.
@@ -289,6 +313,8 @@ Treating the test output as a live, up-to-date bug list is deliberate — see `S
 ## Design notes
 
 **Prompt caching.** The system prompt contains the full background material and is rebuilt on every request. It is marked with `cache_control: ephemeral` so repeated turns reuse the cached prefix instead of paying for those tokens again.
+
+**Background files fetched once, cached in memory.** `services/resource_store.py` reads the persona's three Markdown background files from either the local `resources/` directory (default) or a private Hugging Face Dataset repo (`RESOURCES_DATASET_REPO`), caching each one in memory after its first fetch — a deliberate change from reading fresh on every turn, since a network round trip per chat turn would be unacceptable and the material doesn't change between edits. The cost is that editing the Hub dataset needs a process restart to take effect. `app.py` calls `warm_cache([...])` at startup so a bad token or a missing file surfaces in the startup logs rather than as a `FALLBACK_GENERIC` reply to the first visitor; `tests/sanity_checks/resource_store_test.py` checks the Hub-backed path specifically.
 
 **Bounded tool loop.** The model can request tools repeatedly. The loop is capped at five round trips, which bounds both latency and API spend for a single chat turn.
 
@@ -353,7 +379,7 @@ The source code in this repository is released under the MIT License. See [`LICE
 The personal content in `resources/` is **not** covered by that license:
 
 - `SUMMARY.md`
-- `SOURAV_GHOSH_CAREER_PROFILE.md`
+- `CAREER_PROFILE.md`
 - `CURRENT_STATUS_AND_PREFERENCES.md`
 
 These files are biographical material — © 2026 Sourav Ghosh, all rights reserved. They are included so the project runs as a working demonstration, not as reusable content. If you are reusing this project, replace all three with your own background material as described in [Add your own content](#add-your-own-content).

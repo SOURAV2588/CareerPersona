@@ -15,8 +15,11 @@ the one failure it found (`inject_003`, a prompt-injection content-bundling
 gap), verified clean, see §5/§12/§15; plus the removal of the LinkedIn-PDF
 resource and `pypdf` dependency in favor of the Markdown career-profile/
 current-status files, a `test_profile.py` fix to match, a judge-client
-retry/token-budget fix for a transient judged-eval flake, and the
-`summary.txt` → `SUMMARY.md` rename, see §5/§12/§13/§15/§16).
+retry/token-budget fix for a transient judged-eval flake, the
+`summary.txt` → `SUMMARY.md` rename, and the introduction of
+`services/resource_store.py` (an optional Hugging Face Hub backend for the
+three background files, with a local `resources/` fallback and a
+`CAREER_PROFILE.md` filename fix), see §2/§5/§12/§13/§14/§15/§16).
 
 ## 1. Purpose
 
@@ -63,6 +66,22 @@ services/mail_utility.py (Gmail API) ── daily digest email of unanswered que
         ▼
 services/question_store.py mark_sent()  (sets sent_at on the rows just emailed)
 ```
+
+**Background material is fetched through a separate resource store, not
+read directly by `services/profile.py`.** `services/resource_store.py`'s
+`get_resource(filename)` returns the contents of `SUMMARY.md`,
+`CAREER_PROFILE.md`, and `CURRENT_STATUS_AND_PREFERENCES.md`, from a
+private Hugging Face Dataset repo when `RESOURCES_DATASET_REPO` is set, or
+from the local `resources/` directory otherwise (the default for
+development and the test suites). Each file is cached in memory after its
+first fetch — deliberately not read fresh on every turn, since a network
+round trip to the Hub on every chat turn would be unacceptable and the
+material doesn't change between edits; the tradeoff is that editing the
+Hub dataset needs a process restart to take effect. `app.py`'s `__main__`
+block calls `warm_cache([...])` before the Gradio server launches, so a bad
+`HF_TOKEN` or a missing file fails loudly in the startup logs rather than
+surfacing as a `FALLBACK_GENERIC` reply to the first visitor. See §5, §13,
+§14.
 
 **The write side and the read side of the pending-question store are the
 same store, and there is now only one store module.** This took two
@@ -240,25 +259,34 @@ a rejected turn costs nothing beyond the check itself.
     handling above, exactly as if the override attempt were not there.
     Added to close the gap pinned by `inject_003` (§12, "Fixed since the
     last pass").
-- Background context is sourced from **three** files, read fresh on every
-  request, in this order:
-  1. `resources/SUMMARY.md` — short bio (`get_summary()`).
-  2. `resources/SOURAV_GHOSH_CAREER_PROFILE.md` — a detailed, structured
-     career profile (`get_career_profile_details()`).
-  3. `resources/CURRENT_STATUS_AND_PREFERENCES.md` — notice period,
-     relocation, role-type, and the compensation/reasons-for-leaving
-     redirect policy (`get_current_preferences()`).
-  All three resource-reading helpers consistently resolve their path from
-  `base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))`,
-  so the app works regardless of the process's current working directory.
+- Background context is sourced from **three** Markdown files, each fetched
+  via `services.resource_store.get_resource(filename)` (§2, §13, §14) rather
+  than read directly, in this order:
+  1. `SUMMARY.md` — short bio (`get_summary()`).
+  2. `CAREER_PROFILE.md` — a detailed, structured career profile
+     (`get_career_profile_details()`).
+  3. `CURRENT_STATUS_AND_PREFERENCES.md` — notice period, relocation,
+     role-type, and the compensation/reasons-for-leaving redirect policy
+     (`get_current_preferences()`).
+  `get_resource()` fetches from a private Hugging Face Dataset repo when
+  `RESOURCES_DATASET_REPO` is set, or from the local `resources/` directory
+  otherwise, and caches each file in memory after its first fetch — **not**
+  read fresh on every turn, unlike the rest of the system prompt (§4 item 3
+  rebuilds the surrounding instructions every request; only the three
+  background files are cached, at the resource-store layer rather than
+  Anthropic's `cache_control`). `services/profile.py` itself no longer
+  contains any file-reading logic, path resolution, or a `base_dir` — it
+  imports `get_resource` and each `get_*()` helper is a one-line call
+  through it.
   (`resources/SOURAV_GHOSH_LINKEDIN.pdf` and its `pypdf`-based extraction —
   `get_linkedin_details()`, reading the LinkedIn export page-by-page via
   `pypdf.PdfReader` — have been removed outright; the career-profile and
   current-status Markdown files now cover that material directly, and
   `pypdf` is no longer a dependency (§13). Earlier revisions of this
   project also had one resource path resolved relative to the cwd instead
-  of `base_dir`; that too has been corrected — see git history if useful
-  context, neither is a current issue.)
+  of a `base_dir` computed from the module's own location; that too has
+  been corrected — see git history if useful context, neither is a current
+  issue.)
 
 ## 6. Tools (`services/tools.py`)
 
@@ -548,6 +576,18 @@ Ordered roughly by how likely each is to bite in practice.
    inaccurate picture of what's broken — the actual `pytest` run (§15) is
    the source of truth, not these docstrings.
 
+4. **`services/resource_store.py` has no dedicated unit test file.** Unlike
+   every other `services/` module (§15), there is no
+   `tests/unit/test_resource_store.py` — `_read_local()`, `_read_hub()`,
+   the in-memory cache (`get_resource()`'s double-checked-locking pattern),
+   and `warm_cache()`/`clear_cache()` are exercised only indirectly, via
+   `test_profile.py`'s mocks of `profile.get_resource` (which never call
+   through to the real module) and manually via
+   `tests/sanity_checks/resource_store_test.py` (which only exercises the
+   Hub path, and only on demand). A bug in the local-fallback branch or the
+   caching logic itself could currently ship unnoticed by the automated
+   suite. See §15.
+
 Fixed since the last pass:
 - **Prompt-injection refusals no longer leak content smuggled alongside
   them.** `tests/evals/test_deterministic_cases.py::test_deterministic[injection::inject_003]`
@@ -714,6 +754,45 @@ Fixed since the last pass:
   the LinkedIn-PDF/`pypdf` era (missed in the cleanup above) and referencing
   the deleted `get_linkedin_details`; both corrected while in the file for
   this change.
+- **The background files moved behind a resource store with an optional
+  Hugging Face Hub backend, and the career-profile filename was corrected
+  to match.** `services/resource_store.py` is new: `get_resource(filename)`
+  fetches `SUMMARY.md`/`CAREER_PROFILE.md`/`CURRENT_STATUS_AND_PREFERENCES.md`
+  from a private HF Dataset repo (`RESOURCES_DATASET_REPO`) or the local
+  `resources/` directory, caching each file in memory per process (§2, §5,
+  §13, §14). `services/profile.py`'s `get_summary()`/
+  `get_career_profile_details()`/`get_current_preferences()` were rewired
+  to one-line calls through it, and the local file `resources/
+  SOURAV_GHOSH_CAREER_PROFILE.md` was renamed to `resources/CAREER_PROFILE.md`
+  — matching what's actually in the HF dataset repo, where the file has
+  always been named `CAREER_PROFILE.md`. Before the rename,
+  `get_career_profile_details()` requested `"SOURAV_GHOSH_CAREER_PROFILE.md"`
+  from `get_resource()`, which resolves correctly against the local
+  fallback (same filename) but 404s against the HF Hub backend (different
+  filename there) — caught by a manual run of the new
+  `tests/sanity_checks/resource_store_test.py` (added in the same pass) the
+  first time `RESOURCES_DATASET_REPO` was actually exercised.
+  `services/profile.py` was also simplified while making this change: the
+  now-fully-commented-out local-file-reading versions of the three `get_*()`
+  functions were deleted rather than left as dead code alongside their
+  replacements, and the now-unused `import os`/`base_dir` (nothing in the
+  module opens a file directly any more) were removed too.
+  `tests/unit/test_profile.py` was rewritten to mock `profile.get_resource`
+  instead of calling through to it, both to match the new implementation
+  and to close a hermeticity regression the rewiring introduced: with the
+  old direct-call tests, `RESOURCES_DATASET_REPO`/`HF_TOKEN` being set in
+  this repo's own `.env` meant a plain `pytest` run made a real Hugging Face
+  Hub network call — and briefly failed on it, from the filename bug above,
+  before the mocks went in. See §12 item 4 for the resource-store test
+  coverage this doesn't close, and §15.
+- `CLAUDE.md`, `README.md` (project structure, "Add your own content",
+  environment variable table, "Design notes", License section), and this
+  document (§2, §5, §13, §14, §16) now document `services/resource_store.py`,
+  `RESOURCES_DATASET_REPO`/`RESOURCES_DATASET_REVISION`/`HF_TOKEN`, and
+  `tests/sanity_checks/resource_store_test.py`, none of which had any
+  documentation before this pass. `huggingface_hub` (1.3.2) was added to
+  `requirements.txt` — a real runtime dependency of `_read_hub()`, previously
+  installed but undeclared.
 
 ## 13. External dependencies
 
@@ -728,6 +807,7 @@ From `requirements.txt`:
 | `google-auth`, `google-auth-oauthlib`, `google-api-python-client` | Gmail API OAuth client + service build |
 | `apscheduler` (3.11.0), `pytz` (2025.2) | Cron-style background scheduling for the daily digest; `pytz` is also used by `services/rate_limit.py`'s `DailyBudget` for the same Asia/Kolkata midnight rollover (§7) |
 | `psycopg[binary]` (3.2.10), `psycopg-pool` (3.2.6) | Postgres client + connection pooling for `services/db.py`'s `unknown_questions` table (§9, §11) — used by both `record_unknown_question`'s write path and the digest's read path, plus `tests/unit/test_question_store.py`'s `db`-marked fixture and end-to-end test |
+| `huggingface_hub` (1.3.2) | `services/resource_store.py`'s `_read_hub()` — lazily imported, only actually touched when `RESOURCES_DATASET_REPO` is set; downloads/reads the three background Markdown files from a private Hugging Face Dataset repo (§2, §5, §14) |
 | `langfuse` | LLM tracing/observability backend client |
 | `openinference-instrumentation-anthropic` | Auto-instruments the Anthropic SDK for Langfuse/OpenTelemetry tracing |
 
@@ -748,6 +828,9 @@ Loaded from a gitignored `.env` file via `python-dotenv`:
 | Variable | Used by | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | `app.py` (implicit, via `anthropic.Anthropic()`) | Claude API auth |
+| `RESOURCES_DATASET_REPO` | `services/resource_store.py` | Private Hugging Face Dataset repo id (e.g. `you/career-persona-resources`) holding the three background Markdown files — unset means "read from the local `resources/` directory" (§2, §5) — optional |
+| `RESOURCES_DATASET_REVISION` | `services/resource_store.py` | Git revision of the dataset repo to pin to (default `main`) — only relevant when `RESOURCES_DATASET_REPO` is set — optional |
+| `HF_TOKEN` | `services/resource_store.py` | Read-scoped Hugging Face token — required only when `RESOURCES_DATASET_REPO` is set; `_read_hub()` raises `ResourceUnavailable` up front if it's missing, rather than attempting an anonymous request against a private repo |
 | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` | `mail_utility.py` | OAuth credentials for the Gmail API (used by both immediate notifications and the daily digest) |
 | `GMAIL_RECIPIENT` | `mail_utility.py` | Recipient address for all outgoing notification/digest emails — **required**; `send_email()` raises a clear `RuntimeError` if it's unset (§8) |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Langfuse SDK (implicit, via `get_client()`) | Tracing backend auth/endpoint |
@@ -789,9 +872,15 @@ briefly dropped in the same change that added the `db` marker, and has
 since been restored (§12, "Fixed since the last pass").
 
 - **`tests/unit/`** — fast, deterministic, no network, marked
-  `pytest.mark.unit`. Every module under `services/` has a matching test
-  file (`test_digest.py`, `test_mail_utility.py`, `test_profile.py`,
-  `test_question_store.py`, `test_tools.py`, `test_rate_limit.py`);
+  `pytest.mark.unit`. Almost every module under `services/` has a matching
+  test file (`test_digest.py`, `test_mail_utility.py`, `test_profile.py`,
+  `test_question_store.py`, `test_tools.py`, `test_rate_limit.py`); the
+  exception is `services/resource_store.py` itself, which has no dedicated
+  `test_resource_store.py` — it's exercised only indirectly, through
+  `test_profile.py`'s mocks of `profile.get_resource` (below) and manually
+  via `tests/sanity_checks/resource_store_test.py`, so `_read_local()`,
+  `_read_hub()`, the in-memory cache, and `warm_cache()`/`clear_cache()`
+  have no direct unit coverage of their own (§12).
   `app.py` is split by function rather than given one file —
   `test_app_chat.py` covers `chat()`/`_chat()`, `test_app_tool_dispatch.py`
   covers `handle_tool_calls()`. All external calls (Anthropic, Gmail,
@@ -820,6 +909,23 @@ since been restored (§12, "Fixed since the last pass").
   `python_files = test_*.py` setting in `pytest.ini` only matches
   `test_*.py`, not `*_test.py`, so this manual-run script is safely excluded
   from every automated run despite its `test_generation()` function name.
+  `tests/sanity_checks/resource_store_test.py` follows the same pattern for
+  `services/resource_store.py`'s Hugging Face Hub backend specifically: run
+  via `python -m tests.sanity_checks.resource_store_test`, it fetches all
+  three background Markdown files through `get_resource()` and reports
+  pass/fail for every one (not just the first failure), exiting non-zero if
+  any are missing, unreadable, or empty. It requires
+  `RESOURCES_DATASET_REPO`/`HF_TOKEN` to be set and refuses to run without
+  them, since the local `resources/` fallback path is already covered by
+  `test_profile.py`'s mocks. `test_profile.py`'s
+  `get_summary()`/`get_career_profile_details()`/`get_current_preferences()`
+  tests mock `profile.get_resource` (the name `services/profile.py` binds
+  via `from services.resource_store import get_resource`) and assert it's
+  called with the right filename, rather than calling through to the real
+  resource store — this is what keeps the unit layer hermetic despite
+  `RESOURCES_DATASET_REPO`/`HF_TOKEN` being set in this repo's own `.env`:
+  without the mock, a plain `pytest` run would make a real Hugging Face Hub
+  call (§12, "Fixed since the last pass").
 - **`tests/unit/test_question_store.py`**'s `db`-marked tests — skipped via
   `pytest.mark.skipif` unless `TEST_DATABASE_URL` is set, and excluded from
   a plain `pytest` run by `addopts` either way. An autouse `clean_table`
@@ -960,7 +1066,7 @@ personal content it ships with have different reuse intentions.
 | Scope | Terms |
 |---|---|
 | Source code — `app.py`, `services/`, `tests/`, config files, documentation | MIT License (`LICENSE` at repo root) |
-| `resources/` — `SUMMARY.md`, `SOURAV_GHOSH_CAREER_PROFILE.md`, `CURRENT_STATUS_AND_PREFERENCES.md` | © 2026 Sourav Ghosh, all rights reserved. Not licensed for reuse. |
+| `resources/` — `SUMMARY.md`, `CAREER_PROFILE.md`, `CURRENT_STATUS_AND_PREFERENCES.md` | © 2026 Sourav Ghosh, all rights reserved. Not licensed for reuse. |
 | Runtime data — `data/` (gitignored), the `unknown_questions` Postgres table (§9, §11) | Not licensed; may contain visitor-submitted contact details |
 
 The `LICENSE` file deliberately contains the canonical, unmodified MIT text

@@ -97,10 +97,9 @@ career-persona/
 │   ├── question_store.py                       Postgres-backed pending-question store — used by both tools.py (write) and digest.py (read)
 │   └── digest.py                               Daily digest email and its scheduler
 ├── resources/
-│   ├── summary.txt                             Short bio
+│   ├── SUMMARY.md                              Short bio
 │   ├── SOURAV_GHOSH_CAREER_PROFILE.md          Detailed, structured career profile
-│   ├── CURRENT_STATUS_AND_PREFERENCES.md       Notice period, relocation, role type, redirect policy
-│   └── SOURAV_GHOSH_LINKEDIN.pdf               LinkedIn export, text extracted into the prompt at runtime
+│   └── CURRENT_STATUS_AND_PREFERENCES.md       Notice period, relocation, role type, redirect policy
 ├── tests/
 │   ├── conftest.py                             Session-wide test isolation (mail/API stubs, rate-limit reset)
 │   ├── unit/                                   Fast, fully mocked tests, plus a db-marked end-to-end test (needs TEST_DATABASE_URL)
@@ -147,14 +146,13 @@ pip install -r requirements-dev.txt
 
 ### Add your own content
 
-The persona is driven by four files in `resources/`, all read fresh on every chat turn:
+The persona is driven by three files in `resources/`, all read fresh on every chat turn:
 
-- `summary.txt` — a short free-text bio.
+- `SUMMARY.md` — a short bio.
 - `SOURAV_GHOSH_CAREER_PROFILE.md` — a longer, structured career profile (roles, skills, domain experience).
 - `CURRENT_STATUS_AND_PREFERENCES.md` — notice period, relocation, and the policy for redirecting compensation/reasons-for-leaving questions to email instead of answering them.
-- `SOURAV_GHOSH_LINKEDIN.pdf` — a LinkedIn profile export; text is extracted from it page by page at runtime.
 
-Replace all four with your own. If you rename any of them, update the filename in the matching `get_*()` function in `services/profile.py`. The persona name is currently hardcoded in the same file.
+Replace all three with your own. If you rename any of them, update the filename in the matching `get_*()` function in `services/profile.py`. The persona name is currently hardcoded in the same file.
 
 ### Set up Gmail credentials
 
@@ -354,11 +352,10 @@ The source code in this repository is released under the MIT License. See [`LICE
 
 The personal content in `resources/` is **not** covered by that license:
 
-- `summary.txt`
+- `SUMMARY.md`
 - `SOURAV_GHOSH_CAREER_PROFILE.md`
 - `CURRENT_STATUS_AND_PREFERENCES.md`
-- `SOURAV_GHOSH_LINKEDIN.pdf`
 
-These files are biographical material — © 2026 Sourav Ghosh, all rights reserved. They are included so the project runs as a working demonstration, not as reusable content. If you are reusing this project, replace all four with your own background material as described in [Add your own content](#add-your-own-content).
+These files are biographical material — © 2026 Sourav Ghosh, all rights reserved. They are included so the project runs as a working demonstration, not as reusable content. If you are reusing this project, replace all three with your own background material as described in [Add your own content](#add-your-own-content).
 
 The same applies to the `unknown_questions` Postgres table, which may contain visitor-submitted contact details.

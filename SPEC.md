@@ -1,7 +1,7 @@
 # SPEC.md — Career Persona
 
 Technical specification for the "Career Persona" project. This document reflects
-the codebase as of 2026-08-18 (post error-handling, richer-persona-prompt,
+the codebase as of 2026-08-19 (post error-handling, richer-persona-prompt,
 resource-file rename, judged eval suite, inbound rate-limiting/spend-cap, the
 Postgres-backed question-store migration — write and read sides now
 reconnected, then consolidated into a single `services/question_store.py`
@@ -12,7 +12,11 @@ a full reStructuredText docstring pass over `app.py`, `services/`, and
 store, see §12/§15, a first full `pytest -m live` run of the current
 dataset — initially `46 passed, 1 failed` — and a system-prompt fix for
 the one failure it found (`inject_003`, a prompt-injection content-bundling
-gap), verified clean, see §5/§12/§15).
+gap), verified clean, see §5/§12/§15; plus the removal of the LinkedIn-PDF
+resource and `pypdf` dependency in favor of the Markdown career-profile/
+current-status files, a `test_profile.py` fix to match, a judge-client
+retry/token-budget fix for a transient judged-eval flake, and the
+`summary.txt` → `SUMMARY.md` rename, see §5/§12/§13/§15/§16).
 
 ## 1. Purpose
 
@@ -36,8 +40,8 @@ visitor contact details and flagging questions the persona couldn't answer.
                     │                             ▼                     │
            services/profile.py            Anthropic Messages API   services/tools.py
         (builds prompt from summary +       (model: claude-        (record_user_details,
-         career profile + prefs +           haiku-4-5)              record_unknown_question)
-         LinkedIn PDF)                            │                 │            │
+         career profile + prefs)            haiku-4-5)              record_unknown_question)
+                                                   │                 │            │
                                     rate_limit.record_usage()   immediate email ──┘            │
                                     (§7 — charges daily budget) (MailUtility, Gmail API) insert pending row
                                                                                    ▼
@@ -236,23 +240,25 @@ a rejected turn costs nothing beyond the check itself.
     handling above, exactly as if the override attempt were not there.
     Added to close the gap pinned by `inject_003` (§12, "Fixed since the
     last pass").
-- Background context is sourced from **four** files, read fresh on every
+- Background context is sourced from **three** files, read fresh on every
   request, in this order:
-  1. `resources/summary.txt` — short free-text bio (`get_summary()`).
+  1. `resources/SUMMARY.md` — short bio (`get_summary()`).
   2. `resources/SOURAV_GHOSH_CAREER_PROFILE.md` — a detailed, structured
      career profile (`get_career_profile_details()`).
   3. `resources/CURRENT_STATUS_AND_PREFERENCES.md` — notice period,
      relocation, role-type, and the compensation/reasons-for-leaving
      redirect policy (`get_current_preferences()`).
-  4. `resources/SOURAV_GHOSH_LINKEDIN.pdf` — full LinkedIn export, text
-     extracted page-by-page via `pypdf.PdfReader` (`get_linkedin_details()`).
-  All four resource-reading helpers now consistently resolve their path from
+  All three resource-reading helpers consistently resolve their path from
   `base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))`,
   so the app works regardless of the process's current working directory.
-  (Earlier revisions of this project briefly dropped the LinkedIn PDF from
-  the live prompt and had one resource path resolved relative to the cwd
-  instead of `base_dir` — both have since been corrected; see git history if
-  useful context, they're not current issues.)
+  (`resources/SOURAV_GHOSH_LINKEDIN.pdf` and its `pypdf`-based extraction —
+  `get_linkedin_details()`, reading the LinkedIn export page-by-page via
+  `pypdf.PdfReader` — have been removed outright; the career-profile and
+  current-status Markdown files now cover that material directly, and
+  `pypdf` is no longer a dependency (§13). Earlier revisions of this
+  project also had one resource path resolved relative to the cwd instead
+  of `base_dir`; that too has been corrected — see git history if useful
+  context, neither is a current issue.)
 
 ## 6. Tools (`services/tools.py`)
 
@@ -542,13 +548,6 @@ Ordered roughly by how likely each is to bite in practice.
    inaccurate picture of what's broken — the actual `pytest` run (§15) is
    the source of truth, not these docstrings.
 
-4. **The judged suite's judge client is constructed without the retry/timeout
-   tuning the app's own client uses (`tests/evals/llm_judge.py::judge`).**
-   `anthropic.Anthropic()` is called bare, unlike `app.py`'s
-   `anthropic.Anthropic(max_retries=4, timeout=30.0)`. Minor and test-only —
-   a flaky judge call fails the eval run rather than degrading gracefully —
-   but worth aligning if judged runs start showing transient-error noise.
-
 Fixed since the last pass:
 - **Prompt-injection refusals no longer leak content smuggled alongside
   them.** `tests/evals/test_deterministic_cases.py::test_deterministic[injection::inject_003]`
@@ -663,6 +662,58 @@ Fixed since the last pass:
   that added the `db` marker, has been restored (§15) — an
   unregistered/misspelled marker is a hard collection error again, not a
   silent no-op.
+- **`resources/SOURAV_GHOSH_LINKEDIN.pdf` and its `pypdf`-based extraction
+  have been removed outright, and the docs that described them brought back
+  in sync.** `services/profile.py` no longer imports `pypdf.PdfReader` or
+  defines `get_linkedin_details()` — the career-profile and current-status
+  Markdown files (§5) already cover that material directly, so the PDF was
+  redundant. `pypdf` is no longer in `requirements.txt`, and
+  `tests/evals/test_judged_by_llm_cases.py::load_context()` had its dead
+  PDF-extraction branch removed (no case's `context:` list has pointed at a
+  PDF since the `faith_001`/`avail_001` fixes above). `tests/unit/test_profile.py`
+  had gone stale in the same way — four of its tests still mocked
+  `profile.PdfReader`/`profile.get_linkedin_details`, both long gone,
+  failing with `AttributeError`; rewritten against the real
+  `get_career_profile_details()`/`get_current_preferences()` functions.
+  `CLAUDE.md`, `README.md`, and this document's own architecture diagram,
+  §5, §13, and §16 have all been corrected to match — a full `pytest` run
+  now reports a clean `62 passed, 48 deselected, 2 xfailed` (§15).
+- **The judged suite's judge client now matches the app's retry/timeout
+  tuning, and a truncated judge response gets one retry instead of failing
+  the case outright.** `tests/evals/llm_judge.py::judge` constructs
+  `anthropic.Anthropic(max_retries=4, timeout=30.0)`, matching `app.py`'s
+  client, closing the gap this section used to track as item 4. Separately,
+  a real `faith_001` run hit `json.decoder.JSONDecodeError: Unterminated
+  string` — the judge's `reasoning` field overran the 512-token budget
+  mid-sentence, not a persona regression (the app's own answer was never
+  graded). `_judge_once()` now retries once with double the token budget
+  (up to 1536) before failing on unparseable JSON. Verified: `faith_001`
+  re-run alone passed even before the fix (confirming the flake), and the
+  fix itself doesn't change any calibration or case verdicts — see §15.
+- **`resources/summary.txt` has been replaced by `resources/SUMMARY.md`.**
+  `services/profile.py::get_summary()` now reads `SUMMARY.md`, a fuller
+  rewrite of the bio (added years-of-experience, specific ownership
+  examples, the DVA-C02 mention) rather than a like-for-like rename. The old
+  `summary.txt` was removed from the working tree (`git rm`) rather than
+  left alongside the replacement. Every other reference to the filename was
+  updated to match: `CLAUDE.md`, `README.md` (project-structure tree,
+  "Add your own content", License section), this document (§5, §16),
+  `tests/evals/judged_eval_cases.yaml`'s `context:` lists for `faith_001`,
+  `faith_002`, and `multi_001`, `tests/unit/test_profile.py` (test name and
+  docstring), `tests/unit/test_app_chat.py`'s module docstring, and the
+  filename examples in `services/resource_store.py`'s docstrings. (The
+  `context:` fix matters for the same reason the `faith_001`/`avail_001`
+  gaps did, §12 above: a stale path there would silently narrow what the
+  judge is shown relative to what the app actually feeds the model.) One
+  historical reference was deliberately left as-is: the "Fixed since the
+  last pass" bullet above describing the original `faith_001` context bug
+  names `resources/summary.txt` because that was the actual (wrong) path at
+  the time the bug existed — changing it would misrepresent the history.
+  `services/profile.py`'s own module docstring and
+  `get_system_prompt_for_profile()`'s docstring were also still describing
+  the LinkedIn-PDF/`pypdf` era (missed in the cleanup above) and referencing
+  the deleted `get_linkedin_details`; both corrected while in the file for
+  this change.
 
 ## 13. External dependencies
 
@@ -673,7 +724,6 @@ From `requirements.txt`:
 | `anthropic` (0.117.0) | Claude Messages API client (app client constructed with `max_retries=4, timeout=30.0`) |
 | `gradio` (6.3.0) | Chat web UI (`ChatInterface`) |
 | `python-dotenv` (1.2.1) | Loads `.env` into process environment |
-| `pypdf` (6.6.0) | Extracts text from the LinkedIn PDF export, used in the live prompt (§5) and by the judged suite's `load_context()` for PDF-backed eval cases |
 | `requests` (2.32.5) | HTTP client — no active call site in `services/` or `app.py`; likely an unused direct dependency now that the legacy Pushover notifier has been removed |
 | `google-auth`, `google-auth-oauthlib`, `google-api-python-client` | Gmail API OAuth client + service build |
 | `apscheduler` (3.11.0), `pytz` (2025.2) | Cron-style background scheduling for the daily digest; `pytz` is also used by `services/rate_limit.py`'s `DailyBudget` for the same Asia/Kolkata midnight rollover (§7) |
@@ -868,6 +918,26 @@ out-of-scope guidance (§5) the judged cases don't exercise; combining the
 two most recent runs, the full `live` layer currently stands at `47/47`
 passing, though not all from a single `pytest -m live` invocation.
 
+A later full re-run caught one more regression, this time in the unit
+layer: `services/profile.py` had already been refactored on disk (dropping
+`pypdf`/`get_linkedin_details()` in favor of the two Markdown resource
+files, §5) but `tests/unit/test_profile.py` still mocked the removed
+`PdfReader`/`get_linkedin_details`, so 4 of its tests failed on
+`AttributeError` — not a live-model issue, just a test file that hadn't
+been updated alongside the code it tests. Rewritten against the real
+`get_career_profile_details()`/`get_current_preferences()` functions; the
+suite is back to the `62 passed, 48 deselected, 2 xfailed` reported above.
+The same pass re-ran both live layers: the deterministic layer stayed
+clean (`32 passed`), and the judged layer hit one transient failure —
+`faith_001` failed with `json.decoder.JSONDecodeError: Unterminated
+string`, the judge's own `reasoning` field overrunning its 512-token
+budget mid-sentence, not a verdict on the persona's actual (correct)
+answer. Re-running `faith_001` alone passed immediately, confirming flake
+rather than regression; `_judge_once()` in `tests/evals/llm_judge.py` now
+retries once at double the token budget before failing on unparseable
+JSON, and the judge client's `max_retries=4, timeout=30.0` now matches
+`app.py`'s — see §12, "Fixed since the last pass."
+
 Model outputs aren't fully deterministic, so treat any of the counts above
 as a snapshot, not a guarantee — re-run before relying on them for a release
 decision. The eval suite is unaffected by the rate-limit changes in
@@ -890,7 +960,7 @@ personal content it ships with have different reuse intentions.
 | Scope | Terms |
 |---|---|
 | Source code — `app.py`, `services/`, `tests/`, config files, documentation | MIT License (`LICENSE` at repo root) |
-| `resources/` — `summary.txt`, `SOURAV_GHOSH_CAREER_PROFILE.md`, `CURRENT_STATUS_AND_PREFERENCES.md`, `SOURAV_GHOSH_LINKEDIN.pdf` | © 2026 Sourav Ghosh, all rights reserved. Not licensed for reuse. |
+| `resources/` — `SUMMARY.md`, `SOURAV_GHOSH_CAREER_PROFILE.md`, `CURRENT_STATUS_AND_PREFERENCES.md` | © 2026 Sourav Ghosh, all rights reserved. Not licensed for reuse. |
 | Runtime data — `data/` (gitignored), the `unknown_questions` Postgres table (§9, §11) | Not licensed; may contain visitor-submitted contact details |
 
 The `LICENSE` file deliberately contains the canonical, unmodified MIT text

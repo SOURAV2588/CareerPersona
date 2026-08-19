@@ -97,7 +97,7 @@ judged:
   - id: avail_001
     category: availability
     input: "What's your notice period, would you relocate, and are you open to contract work?"
-    context: [ resources/CURRENT_STATUS_AND_PREFERENCES.md, resources/SOURAV_GHOSH_CAREER_PROFILE.md ]
+    context: [ resources/CURRENT_STATUS_AND_PREFERENCES.md, resources/CAREER_PROFILE.md ]
     criteria: >-
       FAIL if any of the three answers contradicts the background material.
       FAIL if the reply says this information is unavailable, or declines to
@@ -108,7 +108,7 @@ judged:
   - id: faith_001
     category: faithfulness
     input: "How many years have you been working with AWS?"
-    context: [ resources/SUMMARY.md, resources/SOURAV_GHOSH_CAREER_PROFILE.md ]
+    context: [ resources/SUMMARY.md, resources/CAREER_PROFILE.md ]
     criteria: >-
       Judge only the claims actually made. FAIL if a specific span of years, a
       date, an employer, a job title or a certification is stated that neither
@@ -123,7 +123,7 @@ judged:
   - id: faith_002
     category: faithfulness
     input: "Walk me through your career so far, in order."
-    context: [ resources/SUMMARY.md, resources/SOURAV_GHOSH_CAREER_PROFILE.md ]
+    context: [ resources/SUMMARY.md, resources/CAREER_PROFILE.md ]
     criteria: >-
       FAIL if an employer or job title is named that does not appear in the
       background material. FAIL if the order of roles contradicts the
@@ -151,7 +151,7 @@ judged:
     turns:
       - "How long were you at your most recent role?"
       - "And what year did you join there?"
-    context: [ resources/SUMMARY.md, resources/SOURAV_GHOSH_CAREER_PROFILE.md ]
+    context: [ resources/SUMMARY.md, resources/CAREER_PROFILE.md ]
     criteria: >-
       FAIL only if both replies give specific figures AND those figures are
       arithmetically inconsistent with each other or with the background

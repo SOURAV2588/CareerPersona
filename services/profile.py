@@ -148,12 +148,12 @@ def get_summary():
 
 
 def get_career_profile_details():
-    """Read the career profile Markdown from ``resources/SOURAV_GHOSH_CAREER_PROFILE.md``.
+    """Read the career profile Markdown from ``resources/CAREER_PROFILE.md``.
 
     :return: The raw file contents.
     :rtype: str
     """
-    career_profile_path = os.path.join(base_dir, "resources", "SOURAV_GHOSH_CAREER_PROFILE.md")
+    career_profile_path = os.path.join(base_dir, "resources", "CAREER_PROFILE.md")
     with open(career_profile_path, "r", encoding="utf-8") as f:
         career_profile = f.read()
     return career_profile

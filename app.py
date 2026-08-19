@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from langfuse import get_client, observe
 from openinference.instrumentation.anthropic import AnthropicInstrumentor
 
-from services import rate_limit
+from services import rate_limit, resource_store
 from services.db import init_db
 from services.digest import start_scheduler
 from services.profile import get_system_prompt_for_profile, FALLBACK_BUSY, FALLBACK_GENERIC, FALLBACK_TOO_LONG, \
@@ -222,5 +222,10 @@ if __name__ == "__main__":
         logger.exception("Database initialization failed; unanswered-question "
                           "storage and the daily digest will be unavailable "
                           "until DATABASE_URL is reachable.")
+    resource_store.warm_cache([
+        "SUMMARY.md",
+        "CAREER_PROFILE.md",
+        "CURRENT_STATUS_AND_PREFERENCES.md",
+    ])
     start_scheduler()
     gr.ChatInterface(fn=chat).launch(show_error=False)
